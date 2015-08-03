@@ -14,6 +14,9 @@ dependencies and open pull requests to update them.
 
 ## Usage:
 
+**Warning: Be careful when running the bot. If you use the `--delete-forks` switch you might unintentionally delete
+repos. You should create a separate GitHub account specifically for this bot.**
+
 When you run `prbot.py`, you specify a pom artifact ID and a desired version. The script will
 use GitHub's search API to find recently updated Maven repos whose pom.xml have that artifact ID
 as a dependency. If that dependency's version is less than the desired version you specified,
@@ -42,6 +45,11 @@ For example:
 python prbot.py --language java helios-testing 0.8.380 commit_message.sample davidxia \
     <access token> --delete-forks --at-mention-committers -v
 ```
+
+### Usage with GitHub Enterprise
+
+The script defaults to using github.com. If you have an Enterprise installation, specify
+`--domain` and `--api-url`.
 
 See `prbot.py -h` for more info.
 
