@@ -95,10 +95,7 @@ def main():
     semantic_version.Version(args.version)
 
     try:
-        with open(args.commit_message_file) as f:
-            commit_lines = f.readlines()
-            commit_msg_title = commit_lines[0]
-            commit_msg = ''.join(commit_lines)
+        commit_msg_title, commit_msg = parse_commit_message_file(args.commit_message_file)
     except IOError as e:
         exit('Specify the path to a file containing the commit message.\n%s' % e)
 
@@ -109,8 +106,6 @@ def main():
 
     # search for the artifact ID in poms in each repo
     for repo in recently_pushed_repos:
-        if repo in ['social/presence2', 'social/matchmaker', 'social/presence-view', 'Gaia/remote-service', 'bases/silo', 'social/profile-cache']:
-            continue
         raw_url = find_outdated_pom_dependency(base_url, api_url, repo, args.artifact_id, args.version)
         if raw_url is None:
             continue
@@ -627,6 +622,19 @@ def get_last_reminder_age(api_url, repo, pr_number, commenting_user):
         if c['user']['login'] == commenting_user and c['body'].startswith('@'):
             return (datetime.datetime.strptime(c['created_at'], '%Y-%m-%dT%H:%M:%SZ') - datetime.datetime.now()).seconds
     return 0
+
+
+def parse_commit_message_file(file_path):
+    """
+    Parse commit message title and body from file.
+    :param file_path:
+    :return:
+    """
+    with open(file_path) as f:
+        commit_lines = f.readlines()
+        commit_msg_title = commit_lines[0]
+        commit_msg = ''.join(commit_lines)
+    return commit_msg_title, commit_msg
 
 
 if __name__ == '__main__':
