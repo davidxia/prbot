@@ -42,17 +42,14 @@ def ssh_uri_from_domain(domain):
 
 DEFAULT_DOMAIN = 'github.com'
 DEFAULT_BASE_URL = base_url_from_domain(DEFAULT_DOMAIN)
-BASE_URL = DEFAULT_BASE_URL
 DEFAULT_API_URL = 'https://api.github.com/'
-API_URL = DEFAULT_API_URL
 DEFAULT_SSH_URI = ssh_uri_from_domain(DEFAULT_DOMAIN)
-SSH_URI = DEFAULT_SSH_URI
 RESULTS_PER_PAGE = 100
 CLONE_DIR = 'repos'
 LOG_FORMAT = '%(asctime)s %(levelname)s: %(message)s'
 DEFAULT_PUSHED_DATE = (date.today() + relativedelta(months=-1)).strftime('%Y-%m-%d')
 MAX_CMD_RETRIES = 10
-CLONE_RETRY_INTERVAL = 10
+CLONE_RETRY_INTERVAL_SEC = 10
 REMINDER_INTERVAL_SECONDS = 2 * 24 * 60 * 60
 
 logger = logging.getLogger(__name__)
@@ -89,14 +86,13 @@ def main():
     if args.verbosity > 0:
         logger.setLevel(logging.DEBUG)
 
-    if args.domain is not None:
-        global BASE_URL
-        BASE_URL = base_url_from_domain(args.domain)
-        global SSH_URI
-        SSH_URI = ssh_uri_from_domain(args.domain)
-    if args.api_url is not None:
-        global API_URL
-        API_URL = args.api_url
+    # if args.domain is not None:
+    base_url = base_url_from_domain(args.domain) if args.domain is not None else DEFAULT_BASE_URL
+    ssh_uri = ssh_uri_from_domain(args.domain) if args.domain is not None else DEFAULT_SSH_URI
+    api_url = args.api_url if args.api_url is not None else DEFAULT_API_URL
+
+    # Try to validate the version string. Script will exit if any exception is raised
+    semantic_version.Version(args.version)
 
     try:
         with open(args.commit_message_file) as f:
@@ -106,15 +102,16 @@ def main():
     except IOError as e:
         exit('Specify the path to a file containing the commit message.\n%s' % e)
 
-    recently_pushed_repos = get_recently_pushed_repos(args.language, args.pushed_date)
+    recently_pushed_repos = get_recently_pushed_repos(api_url, args.language, args.pushed_date)
     logger.info('Number of repos recently pushed: %d', len(recently_pushed_repos))
 
-    logger.debug('Creating directory "%s" and removing the old one if it exists.', CLONE_DIR)
-    ensure_empty_dir(CLONE_DIR)
+    remove_dir(CLONE_DIR)
 
     # search for the artifact ID in poms in each repo
     for repo in recently_pushed_repos:
-        raw_url = find_outdated_pom_dependency(repo, args.artifact_id, args.version)
+        if repo in ['social/presence2', 'social/matchmaker', 'social/presence-view', 'Gaia/remote-service', 'bases/silo', 'social/profile-cache']:
+            continue
+        raw_url = find_outdated_pom_dependency(base_url, api_url, repo, args.artifact_id, args.version)
         if raw_url is None:
             continue
 
@@ -131,30 +128,31 @@ def main():
                         repo_owner, repo_name, args.fork_owner, repo_name, pr_branch,
                         pull_reqs[0]['html_url'])
             if args.at_mention_committers:
-                at_mention_recent_committers(repo, pull_reqs[0]['number'], args.fork_owner, args.github_token)
+                at_mention_recent_committers(base_url, api_url, repo, pull_reqs[0]['number'], args.fork_owner,
+                                             args.github_token)
             continue
 
         # Fork repo
         forked_repo = '%s/%s' % (args.fork_owner, repo_name)
 
         if args.delete_forks:
-            logger.debug('Deleting your fork %s if it exists.', forked_repo)
-            if delete_repo(args.fork_owner, repo_name, args.github_token):
-                logger.debug('Successfully deleted your fork "%s/%s".', args.fork_owner, repo_name)
+            logger.info('Deleting your fork %s if it exists.', forked_repo)
+            if delete_repo(api_url, args.fork_owner, repo_name, args.github_token):
+                logger.info('Successfully deleted your fork "%s/%s".', args.fork_owner, repo_name)
 
-        if not fork_repo(repo_owner, repo_name, args.github_token):
+        if not fork_repo(api_url, repo_owner, repo_name, args.github_token):
             exit('Couldn\'t fork repository %s to owner %s.' % (repo, args.fork_owner))
 
         # Sleep to give GitHub enough time to fork.
-        time.sleep(CLONE_RETRY_INTERVAL)
-        repo_clone_path = clone_repo(args.fork_owner, repo_name, retry=True)
+        time.sleep(CLONE_RETRY_INTERVAL_SEC)
+        repo_clone_path = clone_repo(ssh_uri, args.fork_owner, repo_name, CLONE_DIR, retry=True)
         if repo_clone_path is None:
             exit('Failed to clone repo %s/%s.', args.fork_owner, repo_name)
 
         file_path = file_path_from_html_url(raw_url)
         if file_path is None:
-            logger.debug('File "%s" no longer exists in the master branch of repo %s. Skipping.',
-                         file_path, repo_clone_path)
+            logger.info('File "%s" no longer exists in the master branch of repo %s. Skipping.',
+                        file_path, repo_clone_path)
             continue
 
         repo_file_path = os.path.join(repo_clone_path, file_path)
@@ -190,10 +188,10 @@ def main():
 
             # Git commit file and push to Github
             branch_add_commit_push(file_path, pr_branch, commit_msg, repo_clone_path)
-            logger.debug('Pushed new branch %s to repo %s.', pr_branch, forked_repo)
+            logger.info('Pushed new branch %s to repo %s.', pr_branch, forked_repo)
 
             pr_number = create_pull_request(
-                repo_owner, repo_name, args.github_token,
+                api_url, repo_owner, repo_name, args.github_token,
                 pull_request_title(commit_msg_title),
                 '%s:%s' % (args.fork_owner, pr_branch), body=commit_msg)
 
@@ -201,36 +199,37 @@ def main():
                 exit('Couldn\'t create pull request from head repo %s:%s to base repo %s.'
                      % (forked_repo, pr_branch, repo))
 
-            pr_url = '%s%s/pulls/%d' % (BASE_URL, repo, pr_number)
+            pr_url = '%s%s/pulls/%d' % (base_url, repo, pr_number)
             logger.info('Created pull request. See %s.', pr_url)
 
             if args.at_mention_committers:
-                at_mention_recent_committers(repo, pr_number, args.fork_owner, args.github_token)
+                at_mention_recent_committers(base_url, api_url, repo, pr_number, args.fork_owner, args.github_token)
 
 
-def ensure_empty_dir(dir_name):
+def remove_dir(dir_name):
     """
     Create directory if it doesn't exist. If it does, make it empty.
     :param dir_name:
     :return:
     """
+    logger.info('Removing directory "%s" if it exists.', dir_name)
     try:
-        os.mkdir(dir_name)
-    except OSError:
         shutil.rmtree(dir_name)
+    except OSError:
         pass
 
 
-def html_url_to_raw_url(html_url):
+def html_url_to_raw_url(base_url, html_url):
     """
     Return a URL to the raw file on the master branch from Github given an HTML URL from a commit hash.
     E.g. https://github.com/spotify/helios/blob/ea5e46dc0bd3a996d57d5ec4568ba758e4d59d24//pom.xml ->
     https://github.com/raw/spotify/helios/master//pom.xml.
+    :param base_url:
     :param html_url:
     :return:
     """
-    t = re.sub(r'blob/.+?/', 'blob/master/', html_url)
-    t = re.sub(r'^%s' % BASE_URL, '%sraw/' % BASE_URL, t)
+    t = re.sub(r'blob/[a-z0-9]+?/', 'blob/master/', html_url)
+    t = re.sub(r'^%s' % base_url, '%sraw/' % base_url, t)
     return t.replace('/blob/master/', '/master/')
 
 
@@ -272,7 +271,7 @@ def run_cmd(cmd_parts, stderr=None, retry=False):
     :param retry:
     :return:
     """
-    logger.debug('%s "%s"', 'Running command', ' '.join(cmd_parts))
+    logger.info('%s "%s"', 'Running command', ' '.join(cmd_parts))
 
     success = False
     retries = 0
@@ -285,10 +284,10 @@ def run_cmd(cmd_parts, stderr=None, retry=False):
         except subprocess.CalledProcessError as e:
             if not retry:
                 raise e
-            logger.debug('Failed to run command. Retries: %d of %d.',  retries, MAX_CMD_RETRIES)
+            logger.info('Failed to run command. Retries: %d of %d.',  retries, MAX_CMD_RETRIES)
             output = e.message
             retries += 1
-            time.sleep(CLONE_RETRY_INTERVAL)
+            time.sleep(CLONE_RETRY_INTERVAL_SEC)
 
     return output
 
@@ -308,7 +307,7 @@ def in_dir(path):
         os.chdir(saved_path)
 
 
-def fork_repo(owner, repo, token, organization=None):
+def fork_repo(api_url, owner, repo, token, organization=None):
     """
     Fork a repo from owner/repo to organization.
     :param owner:
@@ -321,7 +320,7 @@ def fork_repo(owner, repo, token, organization=None):
     if organization is not None:
         data = json.dumps({'organization': organization})
 
-    r = requests.post('%srepos/%s/%s/forks' % (API_URL, owner, repo), data=data,
+    r = requests.post('%srepos/%s/%s/forks' % (api_url, owner, repo), data=data,
                       auth=HTTPBasicAuth(token, 'x-oauth-basic'))
     if r.status_code == requests.codes.accepted:
         return True
@@ -330,10 +329,11 @@ def fork_repo(owner, repo, token, organization=None):
         return False
 
 
-def create_pull_request(owner, repo, token, title, head, base='master', body=None):
+def create_pull_request(api_url, owner, repo, token, title, head, base='master', body=None):
     """
     Create a GitHub pull request and return the pull request number if successful.
     None if not successful.
+    :param api_url:
     :param owner:
     :param repo:
     :param token:
@@ -343,7 +343,7 @@ def create_pull_request(owner, repo, token, title, head, base='master', body=Non
     :param body:
     :return:
     """
-    r = requests.post('%srepos/%s/%s/pulls' % (API_URL, owner, repo), data=json.dumps({
+    r = requests.post('%srepos/%s/%s/pulls' % (api_url, owner, repo), data=json.dumps({
         'title': title,
         'head': head,
         'base': base,
@@ -357,22 +357,24 @@ def create_pull_request(owner, repo, token, title, head, base='master', body=Non
     return response.get('number', None)
 
 
-def delete_repo(owner, repo, token):
+def delete_repo(api_url, owner, repo, token):
     """
     Delete git repo.
+    :param api_url:
     :param owner:
     :param repo:
     :param token:
     :return:
     """
-    r = requests.delete('%srepos/%s/%s' % (API_URL, owner, repo),
+    r = requests.delete('%srepos/%s/%s' % (api_url, owner, repo),
                         auth=HTTPBasicAuth(token, 'x-oauth-basic'))
     return True if r.status_code == requests.codes.no_content else False
 
 
-def get_recently_pushed_repos(lang=None, pushed_date=None):
+def get_recently_pushed_repos(api_url, lang=None, pushed_date=None):
     """
     Get a list of repos in the form of 'owner/repo' that were recently pushed, i.e. updated.
+    :param api_url:
     :param lang:
     :param pushed_date:
     :return:
@@ -385,7 +387,7 @@ def get_recently_pushed_repos(lang=None, pushed_date=None):
         query_str += '+language:%s' % lang
 
     r = requests.get('%ssearch/repositories?q=%s&sort=updated&per_page=%d'
-                     % (API_URL, urllib.quote(query_str, '/+'), RESULTS_PER_PAGE))
+                     % (api_url, urllib.quote(query_str, '/+'), RESULTS_PER_PAGE))
 
     results = json.loads(r.text)
 
@@ -403,7 +405,7 @@ def get_recently_pushed_repos(lang=None, pushed_date=None):
     while curr_page < total_pages:
         curr_page += 1
         r = requests.get('%ssearch/repositories?q=%s&sort=updated&per_page=%d&page=%d'
-                         % (API_URL, urllib.quote('language:java+pushed:>2015-06-01', '/+'),
+                         % (api_url, urllib.quote('language:java+pushed:>2015-06-01', '/+'),
                             RESULTS_PER_PAGE, curr_page))
 
         if r.status_code == requests.codes.forbidden:
@@ -420,9 +422,10 @@ def get_recently_pushed_repos(lang=None, pushed_date=None):
     return recently_pushed_repos
 
 
-def search_in_repo(repo, string, lang=None):
+def search_in_repo(api_url, repo, string, lang=None):
     """
     Search in repo for string and language.
+    :param api_url:
     :param repo:
     :param string:
     :param lang:
@@ -431,31 +434,33 @@ def search_in_repo(repo, string, lang=None):
     query = '%s repo:%s' % (string, repo)
     if lang is not None:
         query += ' language:"%s"' % lang
-    r = requests.get('%ssearch/code?q=%s' % (API_URL, urllib.quote(query)))
+    r = requests.get('%ssearch/code?q=%s' % (api_url, urllib.quote(query)))
     return json.loads(r.text)
 
 
-def get_pull_requests(owner, repo, branch=None):
+def get_pull_requests(api_url, owner, repo, branch=None):
     """
     Get pull requests for owner/repo.
+    :param api_url:
     :param owner:
     :param repo:
     :param branch: Filter pulls by head user and branch name in the format of user:ref-name.
     :return:
     """
-    url = '%srepos/%s/%s/pulls' % (API_URL, owner, repo)
+    url = '%srepos/%s/%s/pulls' % (api_url, owner, repo)
     params = None if branch is None else {'head': branch}
     r = requests.get(url, params=params)
     return json.loads(r.text)
 
 
-def get_recent_committers(repo):
+def get_recent_committers(api_url, repo):
     """
     Get recent committers for repo ordered by frequency of commits descending.
+    :param api_url:
     :param repo:
     :return:
     """
-    r = requests.get('%srepos/%s/commits' % (API_URL, repo))
+    r = requests.get('%srepos/%s/commits' % (api_url, repo))
     if r.status_code != requests.codes.ok:
         logger.error('Could not get list of commits from repo "%s". Returning empty list for recent committers.', repo)
         return []
@@ -472,16 +477,17 @@ def get_recent_committers(repo):
     return [c[0] for c in sorted(recent_committers.items(), key=operator.itemgetter(1), reverse=True)]
 
 
-def comment_on_issue(repo, issue_number, comment, token):
+def comment_on_issue(api_url, repo, issue_number, comment, token):
     """
     Comment on an issue.
+    :param api_url:
     :param repo:
     :param issue_number:
     :param comment:
     :param token:
     :return:
     """
-    r = requests.post('%srepos/%s/issues/%d/comments' % (API_URL, repo, issue_number),
+    r = requests.post('%srepos/%s/issues/%d/comments' % (api_url, repo, issue_number),
                       data=json.dumps({'body': comment}), auth=HTTPBasicAuth(token, 'x-oauth-basic'))
     return True if r.status_code == requests.codes.created else False
 
@@ -504,26 +510,28 @@ def branch_name(string):
     return re.sub(r'\s+', '-', string)[:15]
 
 
-def find_outdated_pom_dependency(repo, dependency, minimum_version):
+def find_outdated_pom_dependency(base_url, api_url, repo, dependency, minimum_version):
     """
     Search GitHub in the repo for the dependency.
     Return None if we cannot find a version of it less than the specified minimum version.
     Otherwise return a string of the raw file's URL.
+    :param base_url:
+    :param api_url:
     :param repo:
     :param dependency:
     :param minimum_version:
     :return:
     """
-    logger.debug('Scanning repo %s...', repo)
+    logger.info('Scanning repo %s...', repo)
 
-    result = search_in_repo(repo, dependency, lang='Maven POM')
+    result = search_in_repo(api_url, repo, dependency, lang='Maven POM')
 
     # Skip if no matches.
     if len(result['items']) < 1:
         return None
 
     html_url = result['items'][0]['html_url']
-    raw_url = html_url_to_raw_url(html_url)
+    raw_url = html_url_to_raw_url(base_url, html_url)
     xml = requests.get(raw_url).text
     try:
         root = ElementTree.XML(xml)
@@ -544,7 +552,7 @@ def find_outdated_pom_dependency(repo, dependency, minimum_version):
 
         version_string = version_string_el.text
 
-        logger.debug('According to the search index, repo %s has %s version %s', repo, dependency, version_string)
+        logger.info('According to the search index, repo %s has %s version %s', repo, dependency, version_string)
         if semantic_version.Version(version_string) >= semantic_version.Version(minimum_version):
             continue
 
@@ -555,55 +563,61 @@ def find_outdated_pom_dependency(repo, dependency, minimum_version):
     return None
 
 
-def clone_repo(owner, repo, retry=False):
+def clone_repo(ssh_uri, owner, repo, clone_dir, retry=False):
     """
     Clone a repo with retries. Return the path of the cloned repo or None on failure.
+    :param ssh_uri:
     :param owner:
     :param repo:
+    :param clone_dir
     :param retry:
     :return:
     """
-    repo_uri = '%s:%s/%s' % (SSH_URI, owner, repo)
-    repo_clone_path = os.path.join(CLONE_DIR, repo)
+    repo_uri = '%s:%s/%s' % (ssh_uri, owner, repo)
+    repo_clone_path = os.path.join(clone_dir, repo)
 
     try:
         run_cmd(['git', 'clone', repo_uri, repo_clone_path], stderr=subprocess.STDOUT, retry=retry)
     except subprocess.CalledProcessError as e:
-        logger.debug('Failed to clone repo %s into %s.\n%s', repo_uri, repo_clone_path, e)
+        logger.info('Failed to clone repo %s into %s.\n%s', repo_uri, repo_clone_path, e)
         return None
     return repo_clone_path
 
 
-def at_mention_recent_committers(repo, pr_number, commenting_user, github_token):
+def at_mention_recent_committers(base_url, api_url, repo, pr_number, commenting_user, github_token):
     """
     @Mention recent committers
+    :param base_url:
+    :param api_url:
+    :param repo:
     :param repo:
     :param pr_number:
     :param github_token:
     :return:
     """
     # Do not remind/spam too frequently
-    if REMINDER_INTERVAL_SECONDS > get_last_reminder_age(repo, pr_number, commenting_user):
+    if REMINDER_INTERVAL_SECONDS > get_last_reminder_age(api_url, repo, pr_number, commenting_user):
         return
 
-    recent_committers = get_recent_committers(repo)
+    recent_committers = get_recent_committers(api_url, repo)
     comment = ' '.join(['@' + rc for rc in recent_committers])
-    if not comment_on_issue(repo, pr_number, comment, github_token):
-        pr_url = '%s%s/pulls/%d' % (BASE_URL, repo, pr_number)
+    if not comment_on_issue(api_url, repo, pr_number, comment, github_token):
+        pr_url = '%s%s/pulls/%d' % (base_url, repo, pr_number)
         logger.error('Failed to @mention committers "%s" on PR %s', comment, pr_url)
     else:
         logger.info('@ mentioned recent committers: "%s".', comment)
 
 
-def get_last_reminder_age(repo, pr_number, commenting_user):
+def get_last_reminder_age(api_url, repo, pr_number, commenting_user):
     """
     Get the age in days of the last @mention comment/reminder.
+    :param api_url:
     :param repo:
     :param pr_number:
     :param commenting_user:
     :return: Number of seconds ago
     """
-    r = requests.get('%srepos/%s/issues/%d/comments' % (API_URL, repo, pr_number))
+    r = requests.get('%srepos/%s/issues/%d/comments' % (api_url, repo, pr_number))
     if r.status_code != requests.codes.ok:
         logger.error('Could not get comments from repo "%s" and issue #%d. Returning -1.', repo, pr_number)
         return -1
@@ -617,4 +631,3 @@ def get_last_reminder_age(repo, pr_number, commenting_user):
 
 if __name__ == '__main__':
     main()
-

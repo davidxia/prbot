@@ -54,4 +54,3 @@ The script defaults to using github.com. If you have an Enterprise installation,
 See `prbot.py -h` for more info.
 
   [1]: https://help.github.com/articles/creating-an-access-token-for-command-line-use/
-
