@@ -576,7 +576,7 @@ def get_last_reminder_age(api_url, repo, pr_number, commenting_user):
     for c in comments[::-1]:
         if c['user']['login'] == commenting_user and c['body'].startswith('@'):
             return (datetime.datetime.strptime(c['created_at'], '%Y-%m-%dT%H:%M:%SZ') - datetime.datetime.now()).seconds
-    return 0
+    return REMINDER_INTERVAL_SECONDS + 1
 
 
 def parse_commit_message_file(file_path):

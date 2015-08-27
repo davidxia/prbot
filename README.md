@@ -46,6 +46,17 @@ python prbot.py --language java helios-testing 0.8.380 commit_message.sample dav
     <access token> --delete-forks --at-mention-committers -v
 ```
 
+### Using a different SSH key
+
+If you generated a new SSH key for a bot account, add the public key to the bot's github account
+and put the private key on the machine which runs the script and modify `~/.ssh/config`.
+
+```
+Host github.com
+  IdentityFile ~/.ssh/id_rsa.prbot
+  IdentitiesOnly yes
+```
+
 ### Usage with GitHub Enterprise
 
 The script defaults to using github.com. If you have an Enterprise installation, specify
