@@ -172,7 +172,7 @@ def main():
             exit('Couldn\'t create pull request from head repo %s:%s to base repo %s.'
                  % (forked_repo, pr_branch, repo))
 
-        pr_url = '%s%s/pulls/%d' % (base_url, repo, pr_number)
+        pr_url = '%s%s/pull/%d' % (base_url, repo, pr_number)
         logger.info('Created pull request. See %s.', pr_url)
 
         if args.at_mention_committers:
