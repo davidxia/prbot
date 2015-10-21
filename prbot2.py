@@ -546,7 +546,8 @@ def at_mention_recent_committers(base_url, api_url, repo, pr_number, commenting_
     :return:
     """
     # Do not remind/spam too frequently
-    if REMINDER_INTERVAL_SECONDS > get_last_reminder_age(api_url, repo, pr_number, commenting_user):
+    last_reminder_age = get_last_reminder_age(api_url, repo, pr_number, commenting_user)
+    if last_reminder_age is not None and REMINDER_INTERVAL_SECONDS > last_reminder_age:
         return
 
     recent_committers = get_recent_committers(api_url, repo)
@@ -560,7 +561,8 @@ def at_mention_recent_committers(base_url, api_url, repo, pr_number, commenting_
 
 def get_last_reminder_age(api_url, repo, pr_number, commenting_user):
     """
-    Get the age in days of the last @mention comment/reminder.
+    Get the age in days of the last @mention comment/reminder. Return None to indicate error or that no reminder has
+    been posted.
     :param api_url:
     :param repo:
     :param pr_number:
@@ -570,13 +572,13 @@ def get_last_reminder_age(api_url, repo, pr_number, commenting_user):
     r = requests.get('%srepos/%s/issues/%d/comments' % (api_url, repo, pr_number))
     if r.status_code != requests.codes.ok:
         logger.error('Could not get comments from repo "%s" and issue #%d. Returning -1.', repo, pr_number)
-        return -1
+        return None
     comments = json.loads(r.text)
 
     for c in comments[::-1]:
         if c['user']['login'] == commenting_user and c['body'].startswith('@'):
             return (datetime.datetime.strptime(c['created_at'], '%Y-%m-%dT%H:%M:%SZ') - datetime.datetime.now()).seconds
-    return REMINDER_INTERVAL_SECONDS + 1
+    return None
 
 
 def parse_commit_message_file(file_path):
