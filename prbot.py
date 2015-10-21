@@ -117,7 +117,7 @@ def main():
 
         # See if there's already an open pull request for the repo with the same title
         # TODO (dxia) We are assuming any pull request for this repo from this fork owner is the relevant one.
-        pull_reqs = get_pull_requests(repo_owner, repo_name, args.fork_owner + ':' + pr_branch)
+        pull_reqs = get_pull_requests(api_url, repo_owner, repo_name, branch=args.fork_owner + ':' + pr_branch)
         if len(pull_reqs) > 0:
             logger.info('Already an open pull request for %s/%s from %s/%s:%s. See %s. Skipping.',
                         repo_owner, repo_name, args.fork_owner, repo_name, pr_branch,
