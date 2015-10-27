@@ -232,7 +232,8 @@ def branch_add_commit_push(file_path, git_branch_name, commit_msg, base_path=Non
             run_cmd(['git', 'checkout', '-b', git_branch_name], stderr=subprocess.STDOUT)
             run_cmd(['git', 'add', file_path], stderr=subprocess.STDOUT)
             run_cmd(['git', 'commit', '-m', commit_msg], stderr=subprocess.STDOUT)
-            run_cmd(['git', 'push', '--set-upstream', 'origin', git_branch_name], stderr=subprocess.STDOUT)
+            run_cmd(['git', 'push', '-f', '--set-upstream', 'origin', git_branch_name],
+                    stderr=subprocess.STDOUT)
     return True
 
 
