@@ -129,6 +129,8 @@ def main():
             logger.info('Deleting your fork %s if it exists.', forked_repo)
             if delete_repo(api_url, args.fork_owner, repo_name, args.github_token):
                 logger.info('Successfully deleted your fork "%s/%s".', args.fork_owner, repo_name)
+            else:
+                exit('Couldn\'t delete your fork "%s/%s".', args.fork_owner, repo_name)
 
         if not fork_repo(api_url, repo_owner, repo_name, args.github_token):
             exit('Couldn\'t fork repository %s to owner %s.' % (repo, args.fork_owner))
@@ -342,7 +344,7 @@ def delete_repo(api_url, owner, repo, token):
     """
     r = requests.delete('%srepos/%s/%s' % (api_url, owner, repo),
                         auth=HTTPBasicAuth(token, 'x-oauth-basic'))
-    return True if r.status_code == requests.codes.no_content else False
+    return r.status_code == requests.codes.no_content
 
 
 def get_recently_pushed_repos(api_url, lang=None, pushed_date=None):
@@ -463,7 +465,7 @@ def comment_on_issue(api_url, repo, issue_number, comment, token):
     """
     r = requests.post('%srepos/%s/issues/%d/comments' % (api_url, repo, issue_number),
                       data=json.dumps({'body': comment}), auth=HTTPBasicAuth(token, 'x-oauth-basic'))
-    return True if r.status_code == requests.codes.created else False
+    return r.status_code == requests.codes.created
 
 
 def pull_request_title(string):
