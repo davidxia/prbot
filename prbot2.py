@@ -127,10 +127,12 @@ def main():
 
         if args.delete_forks:
             logger.info('Deleting your fork %s if it exists.', forked_repo)
-            if delete_repo(api_url, args.fork_owner, repo_name, args.github_token):
+            status = delete_repo(api_url, args.fork_owner, repo_name, args.github_token)
+            if status == requests.codes.no_content:
                 logger.info('Successfully deleted your fork "%s/%s".', args.fork_owner, repo_name)
             else:
-                exit('Couldn\'t delete your fork "%s/%s".' % (args.fork_owner, repo_name))
+                logger.info('Couldn\'t delete your fork "%s/%s". Got status code %d.'
+                            % (args.fork_owner, repo_name, status))
 
         if not fork_repo(api_url, repo_owner, repo_name, args.github_token):
             exit('Couldn\'t fork repository %s to owner %s.' % (repo, args.fork_owner))
@@ -345,7 +347,7 @@ def delete_repo(api_url, owner, repo, token):
     """
     r = requests.delete('%srepos/%s/%s' % (api_url, owner, repo),
                         auth=HTTPBasicAuth(token, 'x-oauth-basic'))
-    return r.status_code == requests.codes.no_content
+    return r.status_code
 
 
 def get_recently_pushed_repos(api_url, lang=None, pushed_date=None):
