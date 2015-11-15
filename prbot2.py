@@ -130,7 +130,7 @@ def main():
             if delete_repo(api_url, args.fork_owner, repo_name, args.github_token):
                 logger.info('Successfully deleted your fork "%s/%s".', args.fork_owner, repo_name)
             else:
-                exit('Couldn\'t delete your fork "%s/%s".', args.fork_owner, repo_name)
+                exit('Couldn\'t delete your fork "%s/%s".' % (args.fork_owner, repo_name))
 
         if not fork_repo(api_url, repo_owner, repo_name, args.github_token):
             exit('Couldn\'t fork repository %s to owner %s.' % (repo, args.fork_owner))
@@ -286,6 +286,7 @@ def in_dir(path):
 def fork_repo(api_url, owner, repo, token, organization=None):
     """
     Fork a repo from owner/repo to organization.
+    :param api_url:
     :param owner:
     :param repo:
     :param token:
@@ -545,6 +546,7 @@ def at_mention_recent_committers(base_url, api_url, repo, pr_number, commenting_
     :param repo:
     :param repo:
     :param pr_number:
+    :param commenting_user:
     :param github_token:
     :return:
     """
