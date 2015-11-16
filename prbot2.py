@@ -94,6 +94,12 @@ def main():
     except IOError as e:
         exit('Specify the path to a file containing the commit message.\n%s' % e)
 
+    pr_branch = branch_name(commit_msg_title)
+
+    # Remind committers for open PRs
+    if args.at_mention_committers:
+        remind_prs(base_url, api_url, pr_branch, args.fork_owner, args.github_token)
+
     recently_pushed_repos = get_recently_pushed_repos(api_url, args.language, args.pushed_date)
     logger.info('Number of repos recently pushed: %d', len(recently_pushed_repos))
 
@@ -108,7 +114,6 @@ def main():
         repo_parts = repo.split('/')
         repo_owner = repo_parts[0]
         repo_name = repo_parts[1]
-        pr_branch = branch_name(commit_msg_title)
 
         # See if there's already an open pull request for the repo with the same title
         # TODO (dxia) We are assuming any pull request for this repo from this fork owner is the relevant one.
@@ -117,9 +122,6 @@ def main():
             logger.info('Already an open pull request for %s/%s from %s/%s:%s. See %s. Skipping.',
                         repo_owner, repo_name, args.fork_owner, repo_name, pr_branch,
                         pull_reqs[0]['html_url'])
-            if args.at_mention_committers:
-                at_mention_recent_committers(base_url, api_url, repo, pull_reqs[0]['number'], args.fork_owner,
-                                             args.github_token)
             continue
 
         # Fork repo
@@ -545,8 +547,7 @@ def at_mention_recent_committers(base_url, api_url, repo, pr_number, commenting_
     @Mention recent committers
     :param base_url:
     :param api_url:
-    :param repo:
-    :param repo:
+    :param repo: owner/repo
     :param pr_number:
     :param commenting_user:
     :param github_token:
@@ -568,8 +569,8 @@ def at_mention_recent_committers(base_url, api_url, repo, pr_number, commenting_
 
 def get_last_reminder_age(api_url, repo, pr_number, commenting_user):
     """
-    Get the age in days of the last @mention comment/reminder. Return None to indicate error or that no reminder has
-    been posted.
+    Get the age in seconds since the last @mention comment/reminder.
+    Return None to indicate error or that no reminder has been posted.
     :param api_url:
     :param repo:
     :param pr_number:
@@ -584,7 +585,8 @@ def get_last_reminder_age(api_url, repo, pr_number, commenting_user):
 
     for c in comments[::-1]:
         if c['user']['login'] == commenting_user and c['body'].startswith('@'):
-            return (datetime.datetime.strptime(c['created_at'], '%Y-%m-%dT%H:%M:%SZ') - datetime.datetime.now()).seconds
+            return (datetime.datetime.now() -
+                    datetime.datetime.strptime(c['created_at'], '%Y-%m-%dT%H:%M:%SZ')).total_seconds()
     return None
 
 
@@ -599,6 +601,62 @@ def parse_commit_message_file(file_path):
         commit_msg_title = commit_lines[0]
         commit_msg = ''.join(commit_lines)
     return commit_msg_title, commit_msg
+
+
+def list_repos(api_url, token):
+    """
+    Return a list of all the user's repos
+    :param api_url:
+    :param token:
+    :return: a list of repo names
+    """
+    repo_names = []
+
+    r = requests.get('%suser/repos' % api_url, auth=HTTPBasicAuth(token, 'x-oauth-basic'))
+    repos = json.loads(r.text)
+    logger.info('User has %s repos' % len(repos))
+
+    for repo in repos:
+        repo_names.append(repo['name'])
+
+    return repo_names
+
+
+def remind_prs(base_url, api_url, pr_branch, username, token):
+    """
+    For all this user's open PRs, comment on them with @ mentions as a reminder
+    :param base_url:
+    :param api_url:
+    :param pr_branch:
+    :param username:
+    :param token:
+    :return:
+    """
+    repos = list_repos(api_url, token)
+
+    for repo in repos:
+        fork_owner = get_fork_owner(api_url, username, repo, token)
+        pull_reqs = get_pull_requests(api_url, fork_owner, repo, branch=username + ':' + pr_branch)
+        if not isinstance(pull_reqs, list) or len(pull_reqs) < 1:
+            continue
+        at_mention_recent_committers(base_url, api_url, fork_owner + '/' + repo, pull_reqs[0]['number'],
+                                     username, token)
+
+
+def get_fork_owner(api_url, fork_owner, repo, token):
+    """
+    Get the username of the parent repo of the forked repo
+    :param api_url:
+    :param fork_owner: The username of the user who owns the forked repo
+    :param repo:
+    :param token:
+    :return: The name of the owner of the parent repo. None if the repo is not a fork.
+    """
+    r = requests.get('%srepos/%s/%s' % (api_url, fork_owner, repo), auth=HTTPBasicAuth(token, 'x-oauth-basic'))
+    repo = json.loads(r.text)
+    if 'parent' in repo:
+        return repo['parent']['owner']['login']
+    return None
 
 
 if __name__ == '__main__':
