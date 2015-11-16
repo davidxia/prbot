@@ -50,7 +50,7 @@ LOG_FORMAT = '%(asctime)s %(levelname)s: %(message)s'
 DEFAULT_PUSHED_DATE = (date.today() + relativedelta(months=-1)).strftime('%Y-%m-%d')
 MAX_CMD_RETRIES = 10
 CLONE_RETRY_INTERVAL_SEC = 10
-REMINDER_INTERVAL_SECONDS = 2 * 24 * 60 * 60
+REMINDER_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 
 logger = logging.getLogger(__name__)
 log_handler = logging.StreamHandler()
