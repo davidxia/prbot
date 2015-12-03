@@ -153,7 +153,7 @@ def main():
 
         repo_file_path = os.path.join(repo_clone_path, file_path)
 
-        with open(repo_file_path) as f:
+        with open(repo_file_path.decode('ascii')) as f:
             text = f.read()
 
         if args.old not in text:
@@ -219,7 +219,7 @@ def file_path_from_html_url(github_master_file_url):
     :param github_master_file_url:
     :return:
     """
-    m = re.search(r'master/+(.+)$', github_master_file_url)
+    m = re.search(r'master/+(.+)$', urllib.unquote(github_master_file_url))
     if m is not None:
         return m.group(1)
 

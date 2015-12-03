@@ -73,6 +73,7 @@ def main():
                         help='The GitHub or GitHub Enterprise domain. Defaults to %s.' % DEFAULT_DOMAIN)
     parser.add_argument('--api-url',
                         help='The API URL of GitHub or GitHub Enterprise. Defaults to %s.' % DEFAULT_API_URL)
+    parser.add_argument('--group-id', help='Limit the search to a specific maven group id.')
     parser.add_argument('-v', '--verbosity', action='count', default=0, help='Increase output verbosity.')
     parser.add_argument('artifact_id',
                         help='Artifact ID to use when creating helios job name. The default is to look in pom.xml')
@@ -112,7 +113,8 @@ def main():
 
     # search for the artifact ID in poms in each repo
     for repo in recently_pushed_repos:
-        raw_url = find_outdated_pom_dependency(base_url, api_url, repo, args.artifact_id, args.version)
+        raw_url = find_outdated_pom_dependency(base_url, api_url, repo, args.artifact_id, args.version,
+                                               group_id=args.group_id)
         if raw_url is None:
             continue
 
@@ -158,7 +160,7 @@ def main():
 
         repo_file_path = os.path.join(repo_clone_path, file_path)
 
-        with open(repo_file_path) as f:
+        with open(repo_file_path.decode('ascii')) as f:
             pom_text = f.read()
 
         pom_root = ElementTree.XML(pom_text)
@@ -171,12 +173,16 @@ def main():
         for j in deps.findall('dependency'):
             artifact_id_el = j.find('artifactId')
             version_string_el = j.find('version')
+            group_id_el = j.find('groupId')
 
             if artifact_id_el is None or artifact_id_el.text != args.artifact_id or version_string_el is None:
                 continue
 
             version_string = version_string_el.text
             if semantic_version.Version(version_string) >= semantic_version.Version(args.version):
+                continue
+
+            if args.group_id is not None and group_id_el is not None and args.group_id != group_id_el.text:
                 continue
 
             logger.info('File "%s" on master branch of repo %s has %s version %s. Editing...',
@@ -241,7 +247,7 @@ def file_path_from_html_url(github_master_file_url):
     :param github_master_file_url:
     :return:
     """
-    m = re.search(r'master/+(.+)$', github_master_file_url)
+    m = re.search(r'master/+(.+)$', urllib.unquote(github_master_file_url))
     if m is not None:
         return m.group(1)
 
@@ -513,7 +519,7 @@ def branch_name(string):
     return re.sub(r'\s+', '-', string)[:15]
 
 
-def find_outdated_pom_dependency(base_url, api_url, repo, dependency, minimum_version):
+def find_outdated_pom_dependency(base_url, api_url, repo, dependency, minimum_version, group_id=None):
     """
     Search GitHub in the repo for the dependency.
     Return None if we cannot find a version of it less than the specified minimum version.
@@ -523,6 +529,7 @@ def find_outdated_pom_dependency(base_url, api_url, repo, dependency, minimum_ve
     :param repo:
     :param dependency:
     :param minimum_version:
+    :param group_id: Optional group ID to limit searches to.
     :return:
     """
     logger.info('Scanning repo %s...', repo)
@@ -549,6 +556,7 @@ def find_outdated_pom_dependency(base_url, api_url, repo, dependency, minimum_ve
     for i in deps.findall('dependency'):
         artifact_id_el = i.find('artifactId')
         version_string_el = i.find('version')
+        group_id_el = i.find('groupId')
 
         if artifact_id_el is None or artifact_id_el.text != dependency or version_string_el is None:
             continue
@@ -557,6 +565,9 @@ def find_outdated_pom_dependency(base_url, api_url, repo, dependency, minimum_ve
 
         logger.info('According to the search index, repo %s has %s version %s', repo, dependency, version_string)
         if semantic_version.Version(version_string) >= semantic_version.Version(minimum_version):
+            continue
+
+        if group_id is not None and group_id_el is not None and group_id != group_id_el.text:
             continue
 
         # We found an outdated dependency
