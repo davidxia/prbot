@@ -3,21 +3,21 @@
 """Create pull requests to search and replace strings in GitHub repos."""
 
 import argparse
-from contextlib import contextmanager
-from datetime import date
 import datetime
-import os
 import json
 import logging
-import re
-import urllib
 import operator
-import subprocess
+import os
+import re
 import shutil
+import subprocess
 import time
+import urllib
+from contextlib import contextmanager
+from datetime import date
 
-from dateutil.relativedelta import relativedelta
 import requests
+from dateutil.relativedelta import relativedelta
 from requests.auth import HTTPBasicAuth
 
 
@@ -72,6 +72,8 @@ def main():
                         help='Delete your existing repository forks. This makes sure your fork '
                              'is synced with the base repository and that your pull '
                              'request doesn\'t have unintended commits.')
+    parser.add_argument('--not-only-recently-pushed-repos', action='store_true',
+                        help='Do not limit search to recently pushed repos.')
     parser.add_argument('--at-mention-committers', action='store_true', help='@ mention recent committers.')
     parser.add_argument('--domain',
                         help='The GitHub or GitHub Enterprise domain. Defaults to %s.' % DEFAULT_DOMAIN)
@@ -95,7 +97,8 @@ def main():
     api_url = args.api_url if args.api_url is not None else DEFAULT_API_URL
 
     try:
-        commit_msg_title, commit_msg = parse_commit_message_file(args.commit_message_file)
+        commit_msg_title, commit_msg = parse_commit_message_file(
+            args.commit_message_file)
     except IOError as e:
         exit('Specify the path to a file containing the commit message.\n%s' % e)
 
@@ -103,17 +106,26 @@ def main():
 
     # Remind committers for open PRs
     if args.at_mention_committers:
-        remind_prs(base_url, api_url, pr_branch, args.fork_owner, args.github_token)
+        remind_prs(base_url, api_url, pr_branch, args.fork_owner,
+                   args.github_token)
 
-    recently_pushed_repos = get_recently_pushed_repos(
-        api_url, lang=args.language, pushed_date=args.pushed_date,
-        no_pushed_date=args.no_pushed_date)
-    logger.info('Number of repos recently pushed: %d', len(recently_pushed_repos))
+    if args.not_only_recently_pushed_repos:
+        logger.info('Searching all code...')
+        repos = search_code(
+            api_url, args.old, lang=args.language, pushed_date=args.pushed_date,
+            no_pushed_date=args.no_pushed_date)
+        logger.info('Number of repos matching search query: %d', len(repos))
+    else:
+        logger.info('Only searching recently pushed repos...')
+        repos = get_recently_pushed_repos(
+            api_url, lang=args.language, pushed_date=args.pushed_date,
+            no_pushed_date=args.no_pushed_date)
+        logger.info('Number of repos recently pushed: %d', len(repos))
 
     remove_dir(CLONE_DIR)
 
     # search for the old string in each repo
-    for repo in recently_pushed_repos:
+    for repo in repos:
         raw_url = find_outdated_string(base_url, api_url, repo, args.old)
         if raw_url is None:
             continue
@@ -359,10 +371,28 @@ def delete_repo(api_url, owner, repo, token):
     return r.status_code
 
 
+def search_code(api_url, term, lang=None, pushed_date=None,
+                no_pushed_date=False):
+    """
+    Search for a term
+    :param api_url:
+    :param term:           Term to search for.
+    :param lang:
+    :param pushed_date:
+    :param no_pushed_date: If true, do not limit search to repos pushed to
+                           since specified date.
+    :return:
+    """
+    return search_of_type(api_url, search_type='code', search_term=term,
+                          lang=lang, pushed_date=pushed_date,
+                          no_pushed_date=no_pushed_date)
+
+
 def get_recently_pushed_repos(api_url, lang=None, pushed_date=None,
                               no_pushed_date=False):
     """
-    Get a list of repos in the form of 'owner/repo' that were recently pushed, i.e. updated.
+    Get a list of repos in the form of 'owner/repo' that were recently pushed,
+    i.e. updated.
     :param api_url:
     :param lang:
     :param pushed_date:
@@ -370,7 +400,30 @@ def get_recently_pushed_repos(api_url, lang=None, pushed_date=None,
                            since specified date.
     :return:
     """
-    query_str = ''
+    return search_of_type(api_url, search_type='repositories', lang=lang,
+                          pushed_date=pushed_date,
+                          no_pushed_date=no_pushed_date)
+
+
+def search_of_type(api_url, search_type='repositories', search_term=None,
+                   lang=None, pushed_date=None, no_pushed_date=False):
+    """
+    TBA
+    :param api_url:
+    :param search_type:    The type of object to search in GitHub.
+    :param search_term:    String to search for.
+    :param lang:
+    :param pushed_date:
+    :param no_pushed_date: If true, do not limit search to repos pushed to
+                           since specified date.
+    :return:
+    """
+    if search_type == 'code':
+        if not search_term:
+            logger.error('You must specify a search term if for code searches.')
+        query_str = search_term
+    else:
+        query_str = ''
 
     if not no_pushed_date:
         if pushed_date:
@@ -381,8 +434,8 @@ def get_recently_pushed_repos(api_url, lang=None, pushed_date=None,
     if lang:
         query_str += '+language:%s' % lang
 
-    r = requests.get('%ssearch/repositories?q=%s&sort=updated&per_page=%d'
-                     % (api_url, urllib.quote(query_str, '/+'),
+    r = requests.get('%ssearch/%s?q=%s&sort=updated&per_page=%d'
+                     % (api_url, search_type, urllib.quote(query_str, '/+'),
                         RESULTS_PER_PAGE))
 
     results = json.loads(r.text)
@@ -393,15 +446,20 @@ def get_recently_pushed_repos(api_url, lang=None, pushed_date=None,
         total_pages += 1
 
     curr_page = 1
-    recently_pushed_repos = []
+    recently_pushed_repos = set()
 
     for item in results['items']:
-        recently_pushed_repos.append(item['full_name'])
+        if search_type == 'code':
+            repo_full_name = item['repository']['full_name']
+        else:
+            repo_full_name = item['full_name']
+
+        recently_pushed_repos.add(repo_full_name)
 
     while curr_page < min(MAX_GITHUB_RESULTS_PAGE, total_pages):
         curr_page += 1
-        r = requests.get('%ssearch/repositories?q=%s&sort=updated&per_page=%d&page=%d'
-                         % (api_url, urllib.quote(query_str, '/+'),
+        r = requests.get('%ssearch/%s?q=%s&sort=updated&per_page=%d&page=%d'
+                         % (api_url, search_type, urllib.quote(query_str, '/+'),
                             RESULTS_PER_PAGE, curr_page))
 
         if r.status_code == requests.codes.forbidden:
@@ -413,7 +471,11 @@ def get_recently_pushed_repos(api_url, lang=None, pushed_date=None,
 
         results = json.loads(r.text)
         for item in results['items']:
-            recently_pushed_repos.append(item['full_name'])
+            if search_type == 'code':
+                repo_full_name = item['repository']['full_name']
+            else:
+                repo_full_name = item['full_name']
+            recently_pushed_repos.add(repo_full_name)
 
     return recently_pushed_repos
 
