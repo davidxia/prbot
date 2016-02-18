@@ -51,6 +51,7 @@ DEFAULT_PUSHED_DATE = (date.today() + relativedelta(months=-1)).strftime('%Y-%m-
 MAX_CMD_RETRIES = 10
 CLONE_RETRY_INTERVAL_SEC = 10
 REMINDER_INTERVAL_SECONDS = 7 * 24 * 60 * 60
+MAX_GITHUB_RESULTS_PAGE = 10  # Only the first 1000 search results are available
 
 logger = logging.getLogger(__name__)
 log_handler = logging.StreamHandler()
@@ -64,6 +65,10 @@ def main():
     parser.add_argument('--language', help='Searches repositories that are written in this language.')
     parser.add_argument('--pushed-date', help='Filters repositories based on date they were last updated. '
                                               'Must be in the format YYYY-MM-DD.')
+    parser.add_argument('--no-pushed-date', action='store_true',
+                        help='Do not limit to searching for repos pushed to '
+                             'within the time specified by --pushed-date. '
+                             'Overrides the --pushed-date flag.')
     parser.add_argument('--delete-forks', action='store_true',
                         help='Delete your existing repository forks. This makes sure your fork '
                              'is synced with the base repository and that your pull '
@@ -117,7 +122,9 @@ def main():
     if args.at_mention_committers:
         remind_prs(base_url, api_url, pr_branch, args.fork_owner, args.github_token)
 
-    recently_pushed_repos = get_recently_pushed_repos(api_url, args.language, args.pushed_date)
+    recently_pushed_repos = get_recently_pushed_repos(
+        api_url, lang=args.language, pushed_date=args.pushed_date,
+        no_pushed_date=args.no_pushed_date)
     logger.info('Number of repos recently pushed: %d', len(recently_pushed_repos))
 
     remove_dir(CLONE_DIR)
@@ -392,23 +399,31 @@ def delete_repo(api_url, owner, repo, token):
     return r.status_code
 
 
-def get_recently_pushed_repos(api_url, lang=None, pushed_date=None):
+def get_recently_pushed_repos(api_url, lang=None, pushed_date=None,
+                              no_pushed_date=False):
     """
     Get a list of repos in the form of 'owner/repo' that were recently pushed, i.e. updated.
     :param api_url:
     :param lang:
     :param pushed_date:
+    :param no_pushed_date: If true, do not limit search to repos pushed to
+                           since specified date.
     :return:
     """
-    if pushed_date:
-        query_str = 'pushed:>%s' % pushed_date
-    else:
-        query_str = 'pushed:>%s' % DEFAULT_PUSHED_DATE
+    query_str = ''
+
+    if not no_pushed_date:
+        if pushed_date:
+            query_str = 'pushed:>%s' % pushed_date
+        else:
+            query_str = 'pushed:>%s' % DEFAULT_PUSHED_DATE
+
     if lang:
         query_str += '+language:%s' % lang
 
     r = requests.get('%ssearch/repositories?q=%s&sort=updated&per_page=%d'
-                     % (api_url, urllib.quote(query_str, '/+'), RESULTS_PER_PAGE))
+                     % (api_url, urllib.quote(query_str, '/+'),
+                        RESULTS_PER_PAGE))
 
     results = json.loads(r.text)
 
@@ -423,10 +438,10 @@ def get_recently_pushed_repos(api_url, lang=None, pushed_date=None):
     for item in results['items']:
         recently_pushed_repos.append(item['full_name'])
 
-    while curr_page < total_pages:
+    while curr_page < min(MAX_GITHUB_RESULTS_PAGE, total_pages):
         curr_page += 1
         r = requests.get('%ssearch/repositories?q=%s&sort=updated&per_page=%d&page=%d'
-                         % (api_url, urllib.quote('language:java+pushed:>2015-06-01', '/+'),
+                         % (api_url, urllib.quote(query_str, '/+'),
                             RESULTS_PER_PAGE, curr_page))
 
         if r.status_code == requests.codes.forbidden:
