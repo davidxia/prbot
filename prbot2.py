@@ -561,11 +561,13 @@ def pull_request_title(string):
 
 def branch_name(string):
     """
-    Create a git branch name from a string.
+    Create a git branch name from a string. Remove invalid characters.
     :param string:
     :return:
     """
-    return re.sub(r'\s+', '-', string)[:15]
+    s = re.sub(r'\s+', '-', string)
+    s = re.sub(r'[:~\^\\]+', '-', s)
+    return s[:15]
 
 
 def find_outdated_string(base_url, api_url, repo, old):
