@@ -595,13 +595,14 @@ def find_outdated_pom_dependency(
             continue
 
         version_string = version_string_el.text
-
-        logger.info('According to the search index, repo %s has %s version %s', repo, dependency, version_string)
         if semantic_version.Version(version_string) >= semantic_version.Version(minimum_version):
             continue
 
         if group_id is not None and group_id_el is not None and group_id != group_id_el.text:
             continue
+
+        logger.info('According to the search index, repo %s has %s version %s',
+                    repo, dependency, version_string)
 
         # We found an outdated dependency
         return raw_url
