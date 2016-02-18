@@ -74,6 +74,10 @@ def main():
     parser.add_argument('--api-url',
                         help='The API URL of GitHub or GitHub Enterprise. Defaults to %s.' % DEFAULT_API_URL)
     parser.add_argument('--group-id', help='Limit the search to a specific maven group id.')
+    parser.add_argument('--dep-type', default='dependency',
+                        help='The type of dependency. '
+                             'Specify "--dep-type plugin" to replace outdated '
+                             'plugins under build/plugins.')
     parser.add_argument('-v', '--verbosity', action='count', default=0, help='Increase output verbosity.')
     parser.add_argument('artifact_id',
                         help='Artifact ID to use when creating helios job name. The default is to look in pom.xml')
@@ -86,6 +90,13 @@ def main():
 
     if args.verbosity > 0:
         logger.setLevel(logging.DEBUG)
+
+    if args.dep_type == 'plugin':
+        dep_parent = './build/plugins'
+        dep_children = 'plugin'
+    else:
+        dep_parent = 'dependencies'
+        dep_children = 'dependency'
 
     # if args.domain is not None:
     base_url = base_url_from_domain(args.domain) if args.domain is not None else DEFAULT_BASE_URL
@@ -113,8 +124,9 @@ def main():
 
     # search for the artifact ID in poms in each repo
     for repo in recently_pushed_repos:
-        raw_url = find_outdated_pom_dependency(base_url, api_url, repo, args.artifact_id, args.version,
-                                               group_id=args.group_id)
+        raw_url = find_outdated_pom_dependency(
+            base_url, api_url, repo, args.artifact_id, args.version, dep_parent,
+            dep_children, group_id=args.group_id)
         if raw_url is None:
             continue
 
@@ -165,12 +177,12 @@ def main():
 
         pom_root = ElementTree.XML(pom_text)
 
-        deps = pom_root.find('dependencies')
+        deps = pom_root.find(dep_parent)
         if deps is None:
             logger.warn('Couldn\'t find any dependencies in pom.xml in at %s.', repo_file_path)
             continue
 
-        for j in deps.findall('dependency'):
+        for j in deps.findall(dep_children):
             artifact_id_el = j.find('artifactId')
             version_string_el = j.find('version')
             group_id_el = j.find('groupId')
@@ -519,7 +531,9 @@ def branch_name(string):
     return re.sub(r'\s+', '-', string)[:15]
 
 
-def find_outdated_pom_dependency(base_url, api_url, repo, dependency, minimum_version, group_id=None):
+def find_outdated_pom_dependency(
+        base_url, api_url, repo, dependency, minimum_version, target_parent,
+        target_children, group_id=None):
     """
     Search GitHub in the repo for the dependency.
     Return None if we cannot find a version of it less than the specified minimum version.
@@ -529,6 +543,8 @@ def find_outdated_pom_dependency(base_url, api_url, repo, dependency, minimum_ve
     :param repo:
     :param dependency:
     :param minimum_version:
+    :param target_parent: The name of the XML element under which to search
+    :param target_children: The name of the XML elements to search
     :param group_id: Optional group ID to limit searches to.
     :return:
     """
@@ -549,11 +565,11 @@ def find_outdated_pom_dependency(base_url, api_url, repo, dependency, minimum_ve
         logger.warn('Could not parse xml of repo %s.\n%s', repo, e)
         return None
 
-    deps = root.find('dependencies')
+    deps = root.find(target_parent)
     if deps is None:
         return None
 
-    for i in deps.findall('dependency'):
+    for i in deps.findall(target_children):
         artifact_id_el = i.find('artifactId')
         version_string_el = i.find('version')
         group_id_el = i.find('groupId')
