@@ -10,6 +10,8 @@ dependencies and open pull requests to update them.
 * python modules in `requirements.txt` installed
 * a GitHub or GitHub Enterprise account
 * [an access token for that account with "repo" and "delete_repo" Oauth scopes enabled][1]
+  * configure git to [cache your password][git-cache-password]
+  * log into github.com with your username and access token
 
 
 ## Usage:
@@ -65,3 +67,4 @@ The script defaults to using github.com. If you have an Enterprise installation,
 See `prbot.py -h` for more info.
 
   [1]: https://help.github.com/articles/creating-an-access-token-for-command-line-use/
+  [git-cache-password]: https://help.github.com/articles/caching-your-github-password-in-git/#platform-linux

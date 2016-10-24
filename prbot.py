@@ -31,6 +31,15 @@ def base_url_from_domain(domain):
     return 'https://%s/' % domain
 
 
+def https_uri_from_domain(domain):
+    """
+    Return GitHub HTTPS URI from GitHub domain.
+    :param domain:
+    :return:
+    """
+    return 'https://%s' % domain
+
+
 def ssh_uri_from_domain(domain):
     """
     Return GitHub SSH URI from GitHub domain.
@@ -43,6 +52,7 @@ def ssh_uri_from_domain(domain):
 DEFAULT_DOMAIN = 'github.com'
 DEFAULT_BASE_URL = base_url_from_domain(DEFAULT_DOMAIN)
 DEFAULT_API_URL = 'https://api.github.com/'
+DEFAULT_HTTPS_URI = https_uri_from_domain(DEFAULT_DOMAIN)
 DEFAULT_SSH_URI = ssh_uri_from_domain(DEFAULT_DOMAIN)
 RESULTS_PER_PAGE = 100
 CLONE_DIR = 'repos'
@@ -105,7 +115,7 @@ def main():
 
     # if args.domain is not None:
     base_url = base_url_from_domain(args.domain) if args.domain is not None else DEFAULT_BASE_URL
-    ssh_uri = ssh_uri_from_domain(args.domain) if args.domain is not None else DEFAULT_SSH_URI
+    https_uri = https_uri_from_domain(args.domain) if args.domain is not None else DEFAULT_HTTPS_URI
     api_url = args.api_url if args.api_url is not None else DEFAULT_API_URL
 
     # Try to validate the version string. Script will exit if any exception is raised
@@ -167,7 +177,7 @@ def main():
 
         # Sleep to give GitHub enough time to fork.
         time.sleep(CLONE_RETRY_INTERVAL_SEC)
-        repo_clone_path = clone_repo(ssh_uri, args.fork_owner, repo_name, CLONE_DIR, retry=True)
+        repo_clone_path = clone_repo(https_uri, args.fork_owner, repo_name, CLONE_DIR, retry=True)
         if repo_clone_path is None:
             exit('Failed to clone repo %s/%s.', args.fork_owner, repo_name)
 
@@ -611,17 +621,17 @@ def find_outdated_pom_dependency(
     return None
 
 
-def clone_repo(ssh_uri, owner, repo, clone_dir, retry=False):
+def clone_repo(https_uri, owner, repo, clone_dir, retry=False):
     """
     Clone a repo with retries. Return the path of the cloned repo or None on failure.
-    :param ssh_uri:
+    :param https_uri:
     :param owner:
     :param repo:
     :param clone_dir
     :param retry:
     :return:
     """
-    repo_uri = '%s:%s/%s' % (ssh_uri, owner, repo)
+    repo_uri = '%s/%s/%s' % (https_uri, owner, repo)
     repo_clone_path = os.path.join(clone_dir, repo)
 
     try:
