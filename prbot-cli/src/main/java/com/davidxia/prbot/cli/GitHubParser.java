@@ -37,14 +37,14 @@ class GitHubParser {
 
   private final Namespace options;
 
+  private final Argument domainArg;
+  private final Argument apiUrlArg;
+  private final Argument forkOwnerArg;
+  private final Argument githubTokenArg;
   private final Argument languageArg;
   private final Argument pushedDateArg;
   private final Argument deleteForksArg;
   private final Argument atMentionCommittersArg;
-  private final Argument domainArg;
-  private final Argument apiUrlArg;
-  private final Argument githubTokenArg;
-  private final Argument forkOwnerArg;
   private final Argument commitMessageFileArg;
 
   @SuppressWarnings("JavadocMethod")
