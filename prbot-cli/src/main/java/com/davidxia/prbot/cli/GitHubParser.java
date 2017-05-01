@@ -3,16 +3,11 @@ package com.davidxia.prbot.cli;
 import static net.sourceforge.argparse4j.impl.Arguments.fileType;
 import static net.sourceforge.argparse4j.impl.Arguments.storeTrue;
 
-import com.google.common.base.Throwables;
-
 import java.io.File;
 import java.nio.file.Path;
-import java.text.DateFormat;
-import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.Calendar;
 import java.util.Date;
-import java.util.Locale;
-
 import net.sourceforge.argparse4j.ArgumentParsers;
 import net.sourceforge.argparse4j.inf.Argument;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
@@ -25,11 +20,18 @@ import net.sourceforge.argparse4j.inf.Namespace;
 class GitHubParser {
 
   private static final String DEFAULT_DOMAIN = "github.com";
-  private static final String DEFAULT_API_URL = "https://api.github.com/";
-  private static final String DEFAULT_BASE_URI = "https://" + DEFAULT_DOMAIN + "/";
+  private static final String DEFAULT_API_ENDPOINT = "https://api.github.com";
+  private static final String DEFAULT_PUSHED_DATE;
+  private static final DateArgumentType DATE_ARGUMENT_TYPE = DateArgumentType.create("yyyy-MM-dd");
+
+  static {
+    final Calendar cal = Calendar.getInstance();
+    cal.add(Calendar.MONTH, -1);
+    final SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+    DEFAULT_PUSHED_DATE = dateFormat.format(cal.getTime());
+  }
   //  private static final int RESULTS_PER_PAGE = 100;
   //  private static final String CLONE_DIR = "repos";
-  //  DEFAULT_PUSHED_DATE = (date.today() + relativedelta(months=-1)).strftime('%Y-%m-%d')
   //  MAX_CMD_RETRIES = 10
   //  CLONE_RETRY_INTERVAL_SEC = 10
   //  REMINDER_INTERVAL_SECONDS = 7 * 24 * 60 * 60
@@ -38,7 +40,7 @@ class GitHubParser {
   private final Namespace options;
 
   private final Argument domainArg;
-  private final Argument apiUrlArg;
+  private final Argument apiEndpointArg;
   private final Argument forkOwnerArg;
   private final Argument githubTokenArg;
   private final Argument languageArg;
@@ -74,10 +76,10 @@ class GitHubParser {
         .setDefault(DEFAULT_DOMAIN)
         .help("The GitHub or GitHub Enterprise domain. Defaults to " + DEFAULT_DOMAIN);
 
-    apiUrlArg = parser.addArgument("--api-url")
+    apiEndpointArg = parser.addArgument("--api-endpoint")
         .type(String.class)
-        .setDefault(DEFAULT_API_URL)
-        .help("The GitHub or GitHub Enterprise domain. Defaults to " + DEFAULT_API_URL);
+        .setDefault(DEFAULT_API_ENDPOINT)
+        .help("The GitHub or GitHub Enterprise domain. Defaults to " + DEFAULT_API_ENDPOINT);
 
     githubTokenArg = parser.addArgument("--github-token")
         .type(String.class)
@@ -92,12 +94,14 @@ class GitHubParser {
     commitMessageFileArg = parser.addArgument("--commit-message-file")
         .type(String.class)
         .type(fileType().verifyExists().verifyCanRead())
+        .required(true)
         .help("File containing the Git commit message.");
 
     pushedDateArg = parser.addArgument("--pushed-date")
-        .type(String.class)
+        .type(DATE_ARGUMENT_TYPE)
+        .setDefault(DEFAULT_PUSHED_DATE)
         .help("Filters repositories based on date they were last updated. "
-              + "Must be in the format YYYY-MM-DD.");
+              + "Must be in the format yyyy-MM-dd. Defaults to one month ago.");
 
     try {
       this.options = parser.parseArgs(args);
@@ -107,45 +111,41 @@ class GitHubParser {
     }
   }
 
-  public String getDomain() {
+  String getDomain() {
     return options.getString(domainArg.getDest());
   }
 
-  public Boolean getAtMentionCommitters() {
+  Boolean getAtMentionCommitters() {
     return options.getBoolean(atMentionCommittersArg.getDest());
   }
 
-  public Path getCommitMessageFile() {
+  Path getCommitMessageFile() {
     final File plugin = options.get(commitMessageFileArg.getDest());
     return plugin != null ? plugin.toPath() : null;
   }
 
-  public String getApiUrl() {
-    return options.getString(apiUrlArg.getDest());
+  String getApiEndpoint() {
+    return options.getString(apiEndpointArg.getDest());
   }
 
-  public Date getPushedDate() {
-    final DateFormat format = new SimpleDateFormat("YYYY-MM-DD", Locale.ENGLISH);
-    try {
-      return format.parse(options.getString(pushedDateArg.getDest()));
-    } catch (ParseException e) {
-      throw Throwables.propagate(e);
-    }
+  String getPushedDate() {
+    final Date date = options.get(pushedDateArg.getDest());
+    return DATE_ARGUMENT_TYPE.getDateFormat().format(date);
   }
 
-  public String getLanguage() {
+  String getLanguage() {
     return options.getString(languageArg.getDest());
   }
 
-  public String getGithubTokenArg() {
+  String getGithubTokenArg() {
     return options.getString(githubTokenArg.getDest());
   }
 
-  public String getForkOwner() {
+  String getForkOwner() {
     return options.getString(forkOwnerArg.getDest());
   }
 
-  public Boolean getDeleteForks() {
+  Boolean getDeleteForks() {
     return options.getBoolean(deleteForksArg.getDest());
   }
 }

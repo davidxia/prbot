@@ -44,6 +44,7 @@
 
   <modules>
     <module>prbot-cli</module>
+    <module>prbot-git</module>
     <module>prbot-github</module>
   </modules>
 
@@ -52,6 +53,21 @@
 
   <dependencyManagement>
     <dependencies>
+      <dependency>
+        <groupId>com.davidxia</groupId>
+        <artifactId>prbot-git</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.davidxia</groupId>
+        <artifactId>prbot-github</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.davidxia</groupId>
+        <artifactId>prbot-cli</artifactId>
+        <version>${project.version}</version>
+      </dependency>
       <dependency>
         <groupId>net.sourceforge.argparse4j</groupId>
         <artifactId>argparse4j</artifactId>
@@ -68,20 +84,30 @@
         <version>1.3</version>
       </dependency>
       <dependency>
-        <groupId>org.eclipse.mylyn.github</groupId>
-        <artifactId>org.eclipse.egit.github.core</artifactId>
-        <version>2.1.5</version>
+        <groupId>org.kohsuke</groupId>
+        <artifactId>github-api</artifactId>
+        <version>1.80</version>
       </dependency>
-      <!--<dependency>-->
-        <!--<groupId>org.eclipse.mylyn.github</groupId>-->
-        <!--<artifactId>org.eclipse.egit.github.client</artifactId>-->
-        <!--<version>2.1.5</version>-->
-      <!--</dependency>-->
-      <!--<dependency>-->
-        <!--<groupId>org.eclipse.mylyn.github</groupId>-->
-        <!--<artifactId>org.eclipse.egit.github.service</artifactId>-->
-        <!--<version>2.1.5</version>-->
-      <!--</dependency>-->
+      <dependency>
+        <groupId>commons-io</groupId>
+        <artifactId>commons-io</artifactId>
+        <version>1.4</version>
+      </dependency>
+      <dependency>
+        <groupId>com.squareup.okhttp3</groupId>
+        <artifactId>okhttp</artifactId>
+        <version>3.4.2</version>
+      </dependency>
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>1.7.21</version>
+      </dependency>
+      <dependency>
+        <groupId>org.eclipse.jgit</groupId>
+        <artifactId>org.eclipse.jgit</artifactId>
+        <version>4.5.0.201609210915-r</version>
+      </dependency>
 
       <dependency>
         <groupId>junit</groupId>
@@ -92,6 +118,11 @@
         <groupId>org.hamcrest</groupId>
         <artifactId>hamcrest-core</artifactId>
         <version>1.3</version>
+      </dependency>
+      <dependency>
+        <groupId>org.mockito</groupId>
+        <artifactId>mockito-core</artifactId>
+        <version>1.10.19</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

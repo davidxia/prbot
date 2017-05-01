@@ -1,4 +1,4 @@
-package com.davidxia.prbot.cli;
+package com.davidxia.prbot.git;
 
 import com.google.common.annotations.VisibleForTesting;
 
@@ -6,12 +6,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-class CommitMessageParser {
+public class CommitMessageParser {
 
   private CommitMessageParser() {
   }
 
-  static CommitMessage parseCommitMessage(final Path commitMessageFile) throws IOException {
+  public static CommitMessage parseCommitMessage(final Path commitMessageFile) throws IOException {
     return parseCommitMessage(new String(Files.readAllBytes(commitMessageFile)));
   }
 

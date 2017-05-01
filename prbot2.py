@@ -434,6 +434,7 @@ def search_of_type(api_url, search_type='repositories', search_term=None,
     if lang:
         query_str += '+language:%s' % lang
 
+    import pdb; pdb.set_trace()
     r = requests.get('%ssearch/%s?q=%s&sort=updated&per_page=%d'
                      % (api_url, search_type, urllib.quote(query_str, '/+'),
                         RESULTS_PER_PAGE))
@@ -492,6 +493,7 @@ def search_in_repo(api_url, repo, string, lang=None):
     query = '%s repo:%s' % (string, repo)
     if lang is not None:
         query += ' language:"%s"' % lang
+    import pdb; pdb.set_trace()
     r = requests.get('%ssearch/code?q=%s' % (api_url, urllib.quote(query)))
     return json.loads(r.text)
 

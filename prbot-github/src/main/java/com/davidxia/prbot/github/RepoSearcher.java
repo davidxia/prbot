@@ -1,12 +1,16 @@
 package com.davidxia.prbot.github;
 
-import java.util.List;
 import java.util.concurrent.CompletionStage;
+import org.kohsuke.github.GHContent;
+import org.kohsuke.github.PagedSearchIterable;
 
-import org.eclipse.egit.github.core.SearchRepository;
-
+/**
+ * Searches a repo for a query string and returns results.
+ */
+@FunctionalInterface
 public interface RepoSearcher {
 
-  CompletionStage<List<SearchRepository>> searchRepos();
+  CompletionStage<PagedSearchIterable<GHContent>> searchRepo(final String fullRepoName,
+                                                             final String query);
 
 }

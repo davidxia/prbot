@@ -1,0 +1,64 @@
+[INFO] Scanning for projects...
+[INFO] ------------------------------------------------------------------------
+[INFO] Reactor Build Order:
+[INFO] 
+[INFO] PR Bot Parent
+[INFO] prbot-git
+[INFO] prbot-github
+[INFO] prbot-cli
+[INFO]                                                                         
+[INFO] ------------------------------------------------------------------------
+[INFO] Building PR Bot Parent 0.0.1-SNAPSHOT
+[INFO] ------------------------------------------------------------------------
+[INFO] 
+[INFO] --- maven-dependency-plugin:2.10:tree (default-cli) @ prbot-parent ---
+[INFO] com.davidxia:prbot-parent:pom:0.0.1-SNAPSHOT
+[INFO] \- com.google.code.findbugs:annotations:jar:3.0.0:compile
+[INFO]                                                                         
+[INFO] ------------------------------------------------------------------------
+[INFO] Building prbot-git 0.0.1-SNAPSHOT
+[INFO] ------------------------------------------------------------------------
+[INFO] 
+[INFO] --- maven-dependency-plugin:2.10:tree (default-cli) @ prbot-git ---
+[INFO] com.davidxia:prbot-git:jar:0.0.1-SNAPSHOT
+[INFO] +- com.google.guava:guava:jar:19.0:compile
+[INFO] +- com.google.auto.value:auto-value:jar:1.3:compile
+[INFO] +- org.eclipse.jgit:org.eclipse.jgit:jar:4.5.0.201609210915-r:compile
+[INFO] |  +- com.jcraft:jsch:jar:0.1.53:compile
+[INFO] |  +- com.googlecode.javaewah:JavaEWAH:jar:0.7.9:compile
+[INFO] |  +- org.apache.httpcomponents:httpclient:jar:4.3.6:compile
+[INFO] |  |  +- org.apache.httpcomponents:httpcore:jar:4.3.3:compile
+[INFO] |  |  +- commons-logging:commons-logging:jar:1.1.3:compile
+[INFO] |  |  \- commons-codec:commons-codec:jar:1.6:compile
+[INFO] |  \- org.slf4j:slf4j-api:jar:1.7.21:compile
+[INFO] +- junit:junit:jar:4.12:test
+[INFO] |  \- org.hamcrest:hamcrest-core:jar:1.3:test
+[INFO] \- com.google.code.findbugs:annotations:jar:3.0.0:compile
+[INFO]                                                                         
+[INFO] ------------------------------------------------------------------------
+[INFO] Building prbot-github 0.0.1-SNAPSHOT
+[INFO] ------------------------------------------------------------------------
+[INFO] ------------------------------------------------------------------------
+[INFO] Reactor Summary:
+[INFO] 
+[INFO] PR Bot Parent ...................................... SUCCESS [  0.727 s]
+[INFO] prbot-git .......................................... SUCCESS [  0.075 s]
+[INFO] prbot-github ....................................... FAILURE [  0.033 s]
+[INFO] prbot-cli .......................................... SKIPPED
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time: 1.200 s
+[INFO] Finished at: 2016-11-26T13:10:37-05:00
+[INFO] Final Memory: 16M/309M
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal on project prbot-github: Could not resolve dependencies for project com.davidxia:prbot-github:jar:0.0.1-SNAPSHOT: Could not find artifact com.davidxia:prbot-git:jar:0.0.1-SNAPSHOT -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/DependencyResolutionException
+[ERROR] 
+[ERROR] After correcting the problems, you can resume the build with the command
+[ERROR]   mvn <goals> -rf :prbot-github
