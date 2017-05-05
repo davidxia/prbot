@@ -13,6 +13,7 @@ import time
 from contextlib import contextmanager
 from datetime import date
 
+import requests
 from dateutil.relativedelta import relativedelta
 from github import Github
 from github.AuthenticatedUser import AuthenticatedUser
@@ -28,7 +29,7 @@ DEFAULT_PUSHED_DATE = (date.today() + relativedelta(months=-1))\
 MAX_CMD_RETRIES = 10
 CLONE_RETRY_INTERVAL_SEC = 10
 REMINDER_INTERVAL_DAYS = 7
-MAX_GITHUB_RESULTS_PAGE = 10  # Only the first 1000 search results are available
+MAX_GITHUB_RESULTS_PAGE = 10  # Only first 1000 search results are available
 
 logger = logging.getLogger(__name__)
 log_handler = logging.StreamHandler()
@@ -55,17 +56,8 @@ def main():
              'specified by --pushed. Overrides the --pushed flag. '
              'Defaults to false')
     parser.add_argument(
-        '--delete-forks', action='store_true',
-        help='Delete your existing repository forks. This makes sure your fork'
-             'is synced with the base repository and that your pull request '
-             'doesn\'t have unintended commits.')
-    parser.add_argument(
         '--at-mention-committers', action='store_true',
         help='@ mention recent committers.')
-    parser.add_argument(
-        '--domain',
-        help='The GitHub or GitHub Enterprise domain. Defaults to %s.'
-             % DEFAULT_DOMAIN)
     parser.add_argument(
         '--api-url',
         help='The API URL of GitHub or GitHub Enterprise. Defaults to %s.'
@@ -73,8 +65,10 @@ def main():
     parser.add_argument(
         '-v', '--verbosity', action='count', default=0,
         help='Increase output verbosity.')
-    parser.add_argument('old', help='Old string to replace.')
-    parser.add_argument('new', help='Replacement string.')
+    parser.add_argument(
+        'old', help='Old string to replace. Can be regex expression.')
+    parser.add_argument(
+        'new', help='Replacement string.')
     parser.add_argument(
         'commit_message_file',
         help='File containing the Git commit message.')
@@ -113,14 +107,22 @@ def main():
     # noinspection PyUnboundLocalVariable
     pr_branch = branch_name(commit_msg_title)
 
-    content_files = gh.search_code('"%s"' % args.old, **qualifiers)
+    content_files = gh.search_code('%s' % args.old, **qualifiers)
     # TODO find unique repos to which these files belong so we can open one
     # PR per repo instead of per file?
     for cf in content_files:
+        logger.debug('Searching %s', cf.repository.full_name)
+        # Github search returns fuzzy results. Check the raw file has exact
+        # string before cloning whole repo.
+        if not string_in_file(cf.git_url, args.old):
+            continue
+
         head = authed_user.login + ':' + pr_branch
         repo_pulls = cf.repository.get_pulls(head=head)
 
         # See if repo already has an open PR with the same branch name
+        # TODO Doing this check here without doing the TODO above might skip
+        # over other files in the other that also have the old string.
         existing_pull = False
         for pull in repo_pulls:
             existing_pull = True
@@ -135,7 +137,13 @@ def main():
             fork = authed_user.get_repo(repo_name)
             # Check the parent of the fork is the ContentFile's repo to prevent
             # false matches.
-            if fork.parent.full_name != cf.repository.full_name:
+            if fork.parent is None:
+                logger.warn('%s has no parent!!' % fork.full_name)
+            if fork.parent.owner.login == authed_user.login:
+                logger.debug('Skipping code search matches on own repo %s',
+                             cf.repository.full_name)
+            if fork.parent is None \
+                    or fork.parent.full_name != cf.repository.full_name:
                 raise UnknownObjectException(None, None)
         except UnknownObjectException:
             # Fork repo
@@ -165,11 +173,13 @@ def main():
         with open(file_path.decode('ascii')) as f:
             text = f.read()
 
-        if args.old not in text:
+        m = re.search(r'%s\b' % args.old, text)
+        if m is None:
             logger.debug('Did not find old string "%s" in %s. Skipping.',
                          args.old, file_path)
             continue
-        logger.info('Found old string "%s" in %s. Editing', args.old, file_path)
+        logger.info('Found old string "%s" in %s. Editing',
+                    args.old, file_path)
 
         new_text = text.replace(args.old, args.new)
         with open(file_path, 'w') as f:
@@ -186,7 +196,7 @@ def main():
                 cf.repository.default_branch,
                 '%s:%s' % (authed_user.login, pr_branch))
         except GithubException as e:
-            # For some reason listing PRs and filtering with `head` doesn't work
+            # For some reason listing PRs and filtering to `head` doesn't work
             # sometimes. This will then fail because the PR already exists.
             logger.warn(e)
 
@@ -195,6 +205,23 @@ def main():
         if args.at_mention_committers:
             at_mention_recent_committers(pull, datetime.datetime.now(),
                                          authed_user.login)
+
+
+def string_in_file(git_url, string):
+    """
+    Search git URL for str.
+    :param git_url: URL
+    :param string: String to find.
+    :return: True if string is found. False otherwise.
+    """
+    headers = {'Accept': 'application/vnd.github.v3.raw'}
+    try:
+        text = requests.get(git_url, headers=headers).text
+        m = re.search(r'%s\b' % string, text)
+        return m is not None
+    except requests.exceptions.ConnectionError as e:
+        logger.warn(e)
+    return False
 
 
 def remove_dir(dir_name):
@@ -220,8 +247,9 @@ def branch_add_commit_push(file_path, new_branch, commit_msg, base_path):
     :return:
     """
     with in_dir(base_path):
-        run_cmd(['git', 'checkout', '-b', new_branch], stderr=subprocess.STDOUT)
-        # TODO Seems brittle here; want to remove the base part of the file path
+        run_cmd(['git', 'checkout', '-b', new_branch],
+                stderr=subprocess.STDOUT)
+        # TODO Seems brittle here; want to remove base part of the file path
         run_cmd(['git', 'add', file_path.split(base_path + '/')[1]],
                 stderr=subprocess.STDOUT)
         run_cmd(['git', 'commit', '-m', commit_msg], stderr=subprocess.STDOUT)
@@ -315,7 +343,8 @@ def branch_name(string):
     return s[:15]
 
 
-def clone_repo(clone_url, parent_owner, repo, clone_dir, login, token, retry=False):
+def clone_repo(clone_url, parent_owner, repo, clone_dir, login, token,
+               retry=False):
     """
     Clone repo with retries. Return path of the cloned repo or None on failure.
     :param clone_url: URL of the form https://../.git
@@ -329,6 +358,10 @@ def clone_repo(clone_url, parent_owner, repo, clone_dir, login, token, retry=Fal
     :return:
     """
     repo_clone_path = os.path.join(clone_dir, '%s_%s' % (parent_owner, repo))
+
+    # If it exists, assume it's already cloned
+    if os.path.isdir(repo_clone_path):
+        return
     partial_clone_url = clone_url.split('https://')[1]
     authed_clone_url = 'https://%s:%s@%s' % (login, token, partial_clone_url)
 
@@ -446,6 +479,21 @@ def remind_open_pulls(gh):
     for issue in issues:
         pull = issue.repository.get_pull(issue.number)
         at_mention_recent_committers(pull, now, user.login)
+
+
+def html_url_to_raw_url(base_url, html_url):
+    """
+    Return a URL to the raw file on the master branch from Github given an HTML
+    URL from a commit hash.
+    E.g. https://github.com/spotify/helios/blob/ea5e46dc0bd3a996/pom.xml ->
+    https://github.com/raw/spotify/helios/master/pom.xml.
+    :param base_url:
+    :param html_url:
+    :return:
+    """
+    t = re.sub(r'blob/[a-z0-9]+?/', 'blob/master/', html_url)
+    t = re.sub(r'^%s' % base_url, '%sraw/' % base_url, t)
+    return t.replace('/blob/master/', '/master/')
 
 
 if __name__ == '__main__':
