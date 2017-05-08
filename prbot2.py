@@ -135,15 +135,17 @@ def main():
         try:
             repo_name = cf.repository.name
             fork = authed_user.get_repo(repo_name)
-            # Check the parent of the fork is the ContentFile's repo to prevent
-            # false matches.
             if fork.parent is None:
                 logger.warn('%s has no parent!!' % fork.full_name)
+                raise UnknownObjectException(None, None)
             if fork.parent.owner.login == authed_user.login:
                 logger.debug('Skipping code search matches on own repo %s',
                              cf.repository.full_name)
-            if fork.parent is None \
-                    or fork.parent.full_name != cf.repository.full_name:
+                continue
+            # Check the parent of the fork is the ContentFile's repo to prevent
+            # false matches. This may occur when prbot clones repo A. Then repo
+            # A has its named changed to A' and a new owner creates repo A.
+            if fork.parent.full_name != cf.repository.full_name:
                 raise UnknownObjectException(None, None)
         except UnknownObjectException:
             # Fork repo
