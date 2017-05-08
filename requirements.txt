@@ -1,5 +1,7 @@
 appdirs==1.4.3
+cryptography==1.8.1
 dateutils==0.6.6
+PyGithub==1.34
 pyparsing==2.2.0
 urllib3[secure]==1.21
 requests[security]==2.13.0

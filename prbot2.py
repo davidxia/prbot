@@ -4,53 +4,32 @@
 
 import argparse
 import datetime
-import json
 import logging
-import operator
 import os
 import re
 import shutil
 import subprocess
 import time
-import urllib
 from contextlib import contextmanager
 from datetime import date
 
 import requests
 from dateutil.relativedelta import relativedelta
-from requests.auth import HTTPBasicAuth
-
-
-def base_url_from_domain(domain):
-    """
-    Return GitHub base URL from GitHub domain.
-    :param domain:
-    :return:
-    """
-    return 'https://%s/' % domain
-
-
-def ssh_uri_from_domain(domain):
-    """
-    Return GitHub SSH URI from GitHub domain.
-    :param domain:
-    :return:
-    """
-    return 'git@%s' % domain
-
+from github import Github
+from github.AuthenticatedUser import AuthenticatedUser
+from github.GithubException import UnknownObjectException, GithubException
 
 DEFAULT_DOMAIN = 'github.com'
-DEFAULT_BASE_URL = base_url_from_domain(DEFAULT_DOMAIN)
-DEFAULT_API_URL = 'https://api.github.com/'
-DEFAULT_SSH_URI = ssh_uri_from_domain(DEFAULT_DOMAIN)
+DEFAULT_API_URL = 'https://api.github.com'
 RESULTS_PER_PAGE = 100
 CLONE_DIR = 'repos'
 LOG_FORMAT = '%(asctime)s %(levelname)s: %(message)s'
-DEFAULT_PUSHED_DATE = (date.today() + relativedelta(months=-1)).strftime('%Y-%m-%d')
+DEFAULT_PUSHED_DATE = (date.today() + relativedelta(months=-1))\
+    .strftime('%Y-%m-%d')
 MAX_CMD_RETRIES = 10
 CLONE_RETRY_INTERVAL_SEC = 10
-REMINDER_INTERVAL_SECONDS = 7 * 24 * 60 * 60
-MAX_GITHUB_RESULTS_PAGE = 10  # Only the first 1000 search results are available
+REMINDER_INTERVAL_DAYS = 7
+MAX_GITHUB_RESULTS_PAGE = 10  # Only first 1000 search results are available
 
 logger = logging.getLogger(__name__)
 log_handler = logging.StreamHandler()
@@ -61,147 +40,190 @@ logger.setLevel(logging.INFO)
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--language', help='Searches repositories that are written in this language.')
-    parser.add_argument('--pushed-date', help='Filters repositories based on date they were last updated. '
-                                              'Must be in the format YYYY-MM-DD.')
-    parser.add_argument('--no-pushed-date', action='store_true',
-                        help='Do not limit to searching for repos pushed to '
-                             'within the time specified by --pushed-date. '
-                             'Overrides the --pushed-date flag.')
-    parser.add_argument('--delete-forks', action='store_true',
-                        help='Delete your existing repository forks. This makes sure your fork '
-                             'is synced with the base repository and that your pull '
-                             'request doesn\'t have unintended commits.')
-    parser.add_argument('--not-only-recently-pushed-repos', action='store_true',
-                        help='Do not limit search to recently pushed repos.')
-    parser.add_argument('--at-mention-committers', action='store_true', help='@ mention recent committers.')
-    parser.add_argument('--domain',
-                        help='The GitHub or GitHub Enterprise domain. Defaults to %s.' % DEFAULT_DOMAIN)
-    parser.add_argument('--api-url',
-                        help='The API URL of GitHub or GitHub Enterprise. Defaults to %s.' % DEFAULT_API_URL)
-    parser.add_argument('-v', '--verbosity', action='count', default=0, help='Increase output verbosity.')
-    parser.add_argument('old', help='Old string to replace.')
-    parser.add_argument('new', help='Replacement string.')
-    parser.add_argument('commit_message_file', help='File containing the Git commit message.')
+    parser.add_argument(
+        '--language',
+        help='Searches repositories that are written in this language.')
+    parser.add_argument(
+        '--pushed',
+        default=DEFAULT_PUSHED_DATE,
+        help='Filters code search based on last push to repos. '
+             'Must be in the format [><=]YYYY-MM-DD. '
+             'Defaults to repos last pushed within the last month.')
+    parser.add_argument(
+        '--no-pushed', action='store_true',
+        default=False,
+        help='Do not limit to searching for repos pushed to within the time '
+             'specified by --pushed. Overrides the --pushed flag. '
+             'Defaults to false')
+    parser.add_argument(
+        '--at-mention-committers', action='store_true',
+        help='@ mention recent committers.')
+    parser.add_argument(
+        '--api-url',
+        help='The API URL of GitHub or GitHub Enterprise. Defaults to %s.'
+             % DEFAULT_API_URL)
+    parser.add_argument(
+        '-v', '--verbosity', action='count', default=0,
+        help='Increase output verbosity.')
+    parser.add_argument(
+        'old', help='Old string to replace. Can be regex expression.')
+    parser.add_argument(
+        'new', help='Replacement string.')
+    parser.add_argument(
+        'commit_message_file',
+        help='File containing the Git commit message.')
     parser.add_argument('fork_owner', help='The owner of the git forks.')
-    parser.add_argument('github_token', help='The personal access token of the owner of the git forks.')
+    parser.add_argument(
+        'github_token',
+        help='The personal access token of the owner of the git forks.')
 
     args = parser.parse_args()
 
     if args.verbosity > 0:
         logger.setLevel(logging.DEBUG)
 
-    # if args.domain is not None:
-    base_url = base_url_from_domain(args.domain) if args.domain is not None else DEFAULT_BASE_URL
-    ssh_uri = ssh_uri_from_domain(args.domain) if args.domain is not None else DEFAULT_SSH_URI
-    api_url = args.api_url if args.api_url is not None else DEFAULT_API_URL
+    gh = Github(args.github_token, base_url=args.api_url)
+    authed_user = gh.get_user()
+    if not isinstance(authed_user, AuthenticatedUser):
+        exit('PyGithub did not return AuthenticatedUser')
 
     try:
         commit_msg_title, commit_msg = parse_commit_message_file(
             args.commit_message_file)
     except IOError as e:
-        exit('Specify the path to a file containing the commit message.\n%s' % e)
-
-    pr_branch = branch_name(commit_msg_title)
+        exit('Specify path to a file containing the commit message.\n%s' % e)
 
     # Remind committers for open PRs
     if args.at_mention_committers:
-        remind_prs(base_url, api_url, pr_branch, args.fork_owner,
-                   args.github_token)
-
-    if args.not_only_recently_pushed_repos:
-        logger.info('Searching all code...')
-        repos = search_code(
-            api_url, args.old, lang=args.language, pushed_date=args.pushed_date,
-            no_pushed_date=args.no_pushed_date)
-        logger.info('Number of repos matching search query: %d', len(repos))
-    else:
-        logger.info('Only searching recently pushed repos...')
-        repos = get_recently_pushed_repos(
-            api_url, lang=args.language, pushed_date=args.pushed_date,
-            no_pushed_date=args.no_pushed_date)
-        logger.info('Number of repos recently pushed: %d', len(repos))
+        remind_open_pulls(gh)
 
     remove_dir(CLONE_DIR)
 
-    # search for the old string in each repo
-    for repo in repos:
-        raw_url = find_outdated_string(base_url, api_url, repo, args.old)
-        if raw_url is None:
+    logger.info('Searching all code...')
+    qualifiers = {'language': args.language}
+    if not args.no_pushed:
+        qualifiers['pushed'] = args.pushed
+
+    # noinspection PyUnboundLocalVariable
+    pr_branch = branch_name(commit_msg_title)
+
+    content_files = gh.search_code('%s' % args.old, **qualifiers)
+    # TODO find unique repos to which these files belong so we can open one
+    # PR per repo instead of per file?
+    for cf in content_files:
+        logger.debug('Searching %s', cf.repository.full_name)
+        # Github search returns fuzzy results. Check the raw file has exact
+        # string before cloning whole repo.
+        if not string_in_file(cf.git_url, args.old):
             continue
 
-        repo_parts = repo.split('/')
-        repo_owner = repo_parts[0]
-        repo_name = repo_parts[1]
+        head = authed_user.login + ':' + pr_branch
+        repo_pulls = cf.repository.get_pulls(head=head)
 
-        # See if there's already an open pull request for the repo with the same title
-        # TODO (dxia) We are assuming any pull request for this repo from this fork owner is the relevant one.
-        pull_reqs = get_pull_requests(api_url, repo_owner, repo_name, args.fork_owner + ':' + pr_branch)
-        if len(pull_reqs) > 0:
-            logger.info('Already an open pull request for %s/%s from %s/%s:%s. See %s. Skipping.',
-                        repo_owner, repo_name, args.fork_owner, repo_name, pr_branch,
-                        pull_reqs[0]['html_url'])
+        # See if repo already has an open PR with the same branch name
+        # TODO Doing this check here without doing the TODO above might skip
+        # over other files in the other that also have the old string.
+        existing_pull = False
+        for pull in repo_pulls:
+            existing_pull = True
+            logger.info('Already an open PR for %s from %s. See %s. Skipping.',
+                        cf.repository.full_name, head, pull.html_url)
+            break
+        if existing_pull:
             continue
 
-        # Fork repo
-        forked_repo = '%s/%s' % (args.fork_owner, repo_name)
+        try:
+            repo_name = cf.repository.name
+            fork = authed_user.get_repo(repo_name)
+            if fork.parent is None:
+                logger.warn('%s has no parent!!' % fork.full_name)
+                raise UnknownObjectException(None, None)
+            if fork.parent.owner.login == authed_user.login:
+                logger.debug('Skipping code search matches on own repo %s',
+                             cf.repository.full_name)
+                continue
+            # Check the parent of the fork is the ContentFile's repo to prevent
+            # false matches. This may occur when prbot clones repo A. Then repo
+            # A has its named changed to A' and a new owner creates repo A.
+            if fork.parent.full_name != cf.repository.full_name:
+                raise UnknownObjectException(None, None)
+        except UnknownObjectException:
+            # Fork repo
+            # noinspection PyUnresolvedReferences
+            fork = authed_user.create_fork(cf.repository)
+            # Sleep to give GitHub enough time to fork.
+            time.sleep(CLONE_RETRY_INTERVAL_SEC)
 
-        if args.delete_forks:
-            logger.info('Deleting your fork %s if it exists.', forked_repo)
-            status = delete_repo(api_url, args.fork_owner, repo_name, args.github_token)
-            if status == requests.codes.no_content:
-                logger.info('Successfully deleted your fork "%s/%s".', args.fork_owner, repo_name)
-            else:
-                logger.info('Couldn\'t delete your fork "%s/%s". Got status code %d.'
-                            % (args.fork_owner, repo_name, status))
-
-        if not fork_repo(api_url, repo_owner, repo_name, args.github_token):
-            exit('Couldn\'t fork repository %s to owner %s.' % (repo, args.fork_owner))
-
-        # Sleep to give GitHub enough time to fork.
-        time.sleep(CLONE_RETRY_INTERVAL_SEC)
-        repo_clone_path = clone_repo(ssh_uri, args.fork_owner, repo_name, CLONE_DIR, retry=True)
-        if repo_clone_path is None:
-            exit('Failed to clone repo %s/%s.', args.fork_owner, repo_name)
-
-        file_path = file_path_from_html_url(raw_url)
-        if file_path is None:
-            logger.info('File "%s" no longer exists in the master branch of repo %s. Skipping.',
-                        file_path, repo_clone_path)
+        # Clone forked repo
+        clone_path = clone_repo(fork.clone_url, cf.repository.owner.login,
+                                repo_name, CLONE_DIR,
+                                authed_user.login, args.github_token,
+                                retry=True)
+        if clone_path is None:
+            logger.warning('Failed to clone repo %s/%s.'
+                           % (args.fork_owner, repo_name))
             continue
 
-        repo_file_path = os.path.join(repo_clone_path, file_path)
+        # Sync in case fork is behind upstream.
+        # This can happen if upstream repo's name changed after forking.
+        # Then we won't find the authed_user's repo with the new name,
+        # and create_fork() doesn't sync the fork.
+        sync_fork_with_upstream(clone_path, cf.repository)
 
-        with open(repo_file_path.decode('ascii')) as f:
+        file_path = os.path.join(clone_path, cf.path.lstrip('/'))
+
+        with open(file_path.decode('ascii')) as f:
             text = f.read()
 
-        if args.old not in text:
+        m = re.search(r'%s\b' % args.old, text)
+        if m is None:
+            logger.debug('Did not find old string "%s" in %s. Skipping.',
+                         args.old, file_path)
             continue
-        logger.info('File "%s" on master branch of repo %s has old string "%s". Editing...',
-                    file_path, repo, args.old)
+        logger.info('Found old string "%s" in %s. Editing',
+                    args.old, file_path)
 
         new_text = text.replace(args.old, args.new)
-        with open(repo_file_path, 'w') as f:
+        with open(file_path, 'w') as f:
             f.write(new_text)
 
         # Git commit file and push to Github
-        branch_add_commit_push(file_path, pr_branch, commit_msg, repo_clone_path)
-        logger.info('Pushed new branch %s to repo %s.', pr_branch, forked_repo)
+        branch_add_commit_push(file_path, pr_branch, commit_msg, clone_path)
+        logger.info('Pushed new branch %s to repo %s.',
+                    pr_branch, fork.html_url)
 
-        pr_number = create_pull_request(
-            api_url, repo_owner, repo_name, args.github_token,
-            pull_request_title(commit_msg_title),
-            '%s:%s' % (args.fork_owner, pr_branch), body=commit_msg)
+        try:
+            pull = cf.repository.create_pull(
+                pull_request_title(commit_msg_title), commit_msg,
+                cf.repository.default_branch,
+                '%s:%s' % (authed_user.login, pr_branch))
+        except GithubException as e:
+            # For some reason listing PRs and filtering to `head` doesn't work
+            # sometimes. This will then fail because the PR already exists.
+            logger.warn(e)
 
-        if pr_number is None:
-            exit('Couldn\'t create pull request from head repo %s:%s to base repo %s.'
-                 % (forked_repo, pr_branch, repo))
-
-        pr_url = '%s%s/pull/%d' % (base_url, repo, pr_number)
-        logger.info('Created pull request. See %s.', pr_url)
+        logger.info('Created PR %s.', pull.html_url)
 
         if args.at_mention_committers:
-            at_mention_recent_committers(base_url, api_url, repo, pr_number, args.fork_owner, args.github_token)
+            at_mention_recent_committers(pull, datetime.datetime.now(),
+                                         authed_user.login)
+
+
+def string_in_file(git_url, string):
+    """
+    Search git URL for str.
+    :param git_url: URL
+    :param string: String to find.
+    :return: True if string is found. False otherwise.
+    """
+    headers = {'Accept': 'application/vnd.github.v3.raw'}
+    try:
+        text = requests.get(git_url, headers=headers).text
+        m = re.search(r'%s\b' % string, text)
+        return m is not None
+    except requests.exceptions.ConnectionError as e:
+        logger.warn(e)
+    return False
 
 
 def remove_dir(dir_name):
@@ -217,60 +239,40 @@ def remove_dir(dir_name):
         pass
 
 
-def html_url_to_raw_url(base_url, html_url):
-    """
-    Return a URL to the raw file on the master branch from Github given an HTML URL from a commit hash.
-    E.g. https://github.com/spotify/helios/blob/ea5e46dc0bd3a996d57d5ec4568ba758e4d59d24//pom.xml ->
-    https://github.com/raw/spotify/helios/master//pom.xml.
-    :param base_url:
-    :param html_url:
-    :return:
-    """
-    t = re.sub(r'blob/[a-z0-9]+?/', 'blob/master/', html_url)
-    t = re.sub(r'^%s' % base_url, '%sraw/' % base_url, t)
-    return t.replace('/blob/master/', '/master/')
-
-
-def file_path_from_html_url(github_master_file_url):
-    """
-    Return the file path from a Github HTML URL from master branch.
-    E.g. https://github.com/spotify/helios/blob/master/.gitignore -> .gitignore.
-    :param github_master_file_url:
-    :return:
-    """
-    m = re.search(r'master/+(.+)$', urllib.unquote(github_master_file_url))
-    if m is not None:
-        return m.group(1)
-
-
-def branch_add_commit_push(file_path, git_branch_name, commit_msg, base_path=None):
+def branch_add_commit_push(file_path, new_branch, commit_msg, base_path):
     """
     Git commit a file. cd to base_path if not None.
     :param file_path:
-    :param git_branch_name:
+    :param new_branch: New git branch name
     :param commit_msg:
     :param base_path:
     :return:
     """
-    if base_path is not None:
-        with in_dir(base_path):
-            run_cmd(['git', 'checkout', '-b', git_branch_name], stderr=subprocess.STDOUT)
-            run_cmd(['git', 'add', file_path], stderr=subprocess.STDOUT)
-            run_cmd(['git', 'commit', '-m', commit_msg], stderr=subprocess.STDOUT)
-            run_cmd(['git', 'push', '-f', '--set-upstream', 'origin', git_branch_name],
-                    stderr=subprocess.STDOUT)
+    with in_dir(base_path):
+        run_cmd(['git', 'checkout', '-b', new_branch],
+                stderr=subprocess.STDOUT)
+        # TODO Seems brittle here; want to remove base part of the file path
+        run_cmd(['git', 'add', file_path.split(base_path + '/')[1]],
+                stderr=subprocess.STDOUT)
+        run_cmd(['git', 'commit', '-m', commit_msg], stderr=subprocess.STDOUT)
+        run_cmd(['git', 'push', '-f', '--set-upstream', 'origin', new_branch],
+                stderr=subprocess.STDOUT)
     return True
 
 
-def run_cmd(cmd_parts, stderr=None, retry=False):
+def run_cmd(cmd_parts, stderr=None, retry=False, log_msg=None):
     """
     Run a shell command. cmd_parts must be a list of strings.
     :param cmd_parts:
     :param stderr:
     :param retry:
+    :param log_msg: Overriding log message. Good when cmd has sensitive info.
     :return:
     """
-    logger.info('%s "%s"', 'Running command', ' '.join(cmd_parts))
+    if log_msg is not None:
+        logger.debug(log_msg)
+    else:
+        logger.debug('%s "%s"', 'Running command', ' '.join(cmd_parts))
 
     success = False
     retries = 0
@@ -283,7 +285,8 @@ def run_cmd(cmd_parts, stderr=None, retry=False):
         except subprocess.CalledProcessError as e:
             if not retry:
                 raise e
-            logger.info('Failed to run command. Retries: %d of %d.',  retries, MAX_CMD_RETRIES)
+            logger.info('Failed to run command. Retries: %d of %d.',
+                        retries, MAX_CMD_RETRIES)
             output = e.message
             retries += 1
             time.sleep(CLONE_RETRY_INTERVAL_SEC)
@@ -306,248 +309,20 @@ def in_dir(path):
         os.chdir(saved_path)
 
 
-def fork_repo(api_url, owner, repo, token, organization=None):
-    """
-    Fork a repo from owner/repo to organization.
-    :param api_url:
-    :param owner:
-    :param repo:
-    :param token:
-    :param organization:
-    :return:
-    """
-    data = None
-    if organization is not None:
-        data = json.dumps({'organization': organization})
-
-    r = requests.post('%srepos/%s/%s/forks' % (api_url, owner, repo), data=data,
-                      auth=HTTPBasicAuth(token, 'x-oauth-basic'))
-    if r.status_code == requests.codes.accepted:
-        return True
-    else:
-        print r.content
-        return False
-
-
-def create_pull_request(api_url, owner, repo, token, title, head, base='master', body=None):
-    """
-    Create a GitHub pull request and return the pull request number if successful.
-    None if not successful.
-    :param api_url:
-    :param owner:
-    :param repo:
-    :param token:
-    :param title:
-    :param head:
-    :param base:
-    :param body:
-    :return:
-    """
-    r = requests.post('%srepos/%s/%s/pulls' % (api_url, owner, repo), data=json.dumps({
-        'title': title,
-        'head': head,
-        'base': base,
-        'body': body,
-    }), auth=HTTPBasicAuth(token, 'x-oauth-basic'))
-
-    if r.status_code != requests.codes.created:
-        return None
-
-    response = json.loads(r.text)
-    return response.get('number', None)
-
-
-def delete_repo(api_url, owner, repo, token):
-    """
-    Delete git repo.
-    :param api_url:
-    :param owner:
-    :param repo:
-    :param token:
-    :return:
-    """
-    r = requests.delete('%srepos/%s/%s' % (api_url, owner, repo),
-                        auth=HTTPBasicAuth(token, 'x-oauth-basic'))
-    return r.status_code
-
-
-def search_code(api_url, term, lang=None, pushed_date=None,
-                no_pushed_date=False):
-    """
-    Search for a term
-    :param api_url:
-    :param term:           Term to search for.
-    :param lang:
-    :param pushed_date:
-    :param no_pushed_date: If true, do not limit search to repos pushed to
-                           since specified date.
-    :return:
-    """
-    return search_of_type(api_url, search_type='code', search_term=term,
-                          lang=lang, pushed_date=pushed_date,
-                          no_pushed_date=no_pushed_date)
-
-
-def get_recently_pushed_repos(api_url, lang=None, pushed_date=None,
-                              no_pushed_date=False):
-    """
-    Get a list of repos in the form of 'owner/repo' that were recently pushed,
-    i.e. updated.
-    :param api_url:
-    :param lang:
-    :param pushed_date:
-    :param no_pushed_date: If true, do not limit search to repos pushed to
-                           since specified date.
-    :return:
-    """
-    return search_of_type(api_url, search_type='repositories', lang=lang,
-                          pushed_date=pushed_date,
-                          no_pushed_date=no_pushed_date)
-
-
-def search_of_type(api_url, search_type='repositories', search_term=None,
-                   lang=None, pushed_date=None, no_pushed_date=False):
-    """
-    TBA
-    :param api_url:
-    :param search_type:    The type of object to search in GitHub.
-    :param search_term:    String to search for.
-    :param lang:
-    :param pushed_date:
-    :param no_pushed_date: If true, do not limit search to repos pushed to
-                           since specified date.
-    :return:
-    """
-    if search_type == 'code':
-        if not search_term:
-            logger.error('You must specify a search term if for code searches.')
-        query_str = search_term
-    else:
-        query_str = ''
-
-    if not no_pushed_date:
-        if pushed_date:
-            query_str = 'pushed:>%s' % pushed_date
-        else:
-            query_str = 'pushed:>%s' % DEFAULT_PUSHED_DATE
-
-    if lang:
-        query_str += '+language:%s' % lang
-
-    r = requests.get('%ssearch/%s?q=%s&sort=updated&per_page=%d'
-                     % (api_url, search_type, urllib.quote(query_str, '/+'),
-                        RESULTS_PER_PAGE))
-
-    results = json.loads(r.text)
-
-    total_count = results['total_count']
-    total_pages = total_count / RESULTS_PER_PAGE
-    if total_count % RESULTS_PER_PAGE > 0:
-        total_pages += 1
-
-    curr_page = 1
-    recently_pushed_repos = set()
-
-    for item in results['items']:
-        if search_type == 'code':
-            repo_full_name = item['repository']['full_name']
-        else:
-            repo_full_name = item['full_name']
-
-        recently_pushed_repos.add(repo_full_name)
-
-    while curr_page < min(MAX_GITHUB_RESULTS_PAGE, total_pages):
-        curr_page += 1
-        r = requests.get('%ssearch/%s?q=%s&sort=updated&per_page=%d&page=%d'
-                         % (api_url, search_type, urllib.quote(query_str, '/+'),
-                            RESULTS_PER_PAGE, curr_page))
-
-        if r.status_code == requests.codes.forbidden:
-            j = json.loads(r.text)
-            logger.warn('%s: %s.', j['message'], j['documentation_url'])
-            return recently_pushed_repos
-        elif r.status_code != requests.codes.ok:
-            logger.warn('%s returned status code %d.', r.url, r.status_code)
-
-        results = json.loads(r.text)
-        for item in results['items']:
-            if search_type == 'code':
-                repo_full_name = item['repository']['full_name']
-            else:
-                repo_full_name = item['full_name']
-            recently_pushed_repos.add(repo_full_name)
-
-    return recently_pushed_repos
-
-
-def search_in_repo(api_url, repo, string, lang=None):
-    """
-    Search in repo for string and language.
-    :param api_url:
-    :param repo:
-    :param string:
-    :param lang:
-    :return:
-    """
-    query = '%s repo:%s' % (string, repo)
-    if lang is not None:
-        query += ' language:"%s"' % lang
-    r = requests.get('%ssearch/code?q=%s' % (api_url, urllib.quote(query)))
-    return json.loads(r.text)
-
-
-def get_pull_requests(api_url, owner, repo, branch=None):
-    """
-    Get pull requests for owner/repo.
-    :param api_url:
-    :param owner:
-    :param repo:
-    :param branch: Filter pulls by head user and branch name in the format of user:ref-name.
-    :return:
-    """
-    url = '%srepos/%s/%s/pulls' % (api_url, owner, repo)
-    params = None if branch is None else {'head': branch}
-    r = requests.get(url, params=params)
-    return json.loads(r.text)
-
-
-def get_recent_committers(api_url, repo):
+def get_recent_committers(repo):
     """
     Get recent committers for repo ordered by frequency of commits descending.
-    :param api_url:
-    :param repo:
-    :return:
+    :param repo: github.Github.Repository
+    :return: A set of strings representing recent committers' usernames
     """
-    r = requests.get('%srepos/%s/commits' % (api_url, repo))
-    if r.status_code != requests.codes.ok:
-        logger.error('Could not get list of commits from repo "%s". Returning empty list for recent committers.', repo)
-        return []
-    commits = json.loads(r.text)
+    recent_committers = set()
 
-    recent_committers = {}
-    for c in commits:
-        if c.get('committer') is not None and c['committer'].get('login') is not None:
-            committer = c['committer']['login']
-            if committer not in recent_committers:
-                recent_committers[committer] = 1
-            else:
-                recent_committers[committer] += 1
-    return [c[0] for c in sorted(recent_committers.items(), key=operator.itemgetter(1), reverse=True)]
+    for c in repo.get_commits().get_page(0):
+        if c.committer is None:
+            continue
+        recent_committers.add(c.committer.login)
 
-
-def comment_on_issue(api_url, repo, issue_number, comment, token):
-    """
-    Comment on an issue.
-    :param api_url:
-    :param repo:
-    :param issue_number:
-    :param comment:
-    :param token:
-    :return:
-    """
-    r = requests.post('%srepos/%s/issues/%d/comments' % (api_url, repo, issue_number),
-                      data=json.dumps({'body': comment}), auth=HTTPBasicAuth(token, 'x-oauth-basic'))
-    return r.status_code == requests.codes.created
+    return recent_committers
 
 
 def pull_request_title(string):
@@ -566,106 +341,118 @@ def branch_name(string):
     :return:
     """
     s = re.sub(r'\s+', '-', string)
-    s = re.sub(r'[:~\^\\]+', '-', s)
+    s = re.sub(r'[:~^\\]+', '-', s)
     return s[:15]
 
 
-def find_outdated_string(base_url, api_url, repo, old):
+def clone_repo(clone_url, parent_owner, repo, clone_dir, login, token,
+               retry=False):
     """
-    Search GitHub in the repo for the old string.
-    Return None if we cannot find it.
-    Otherwise return a string of the raw file's URL.
-    :param base_url:
-    :param api_url:
-    :param repo:
-    :param old:
+    Clone repo with retries. Return path of the cloned repo or None on failure.
+    :param clone_url: URL of the form https://../.git
+    :param parent_owner: Name of parent repo's owner.
+                         To prevent collisions on repo name.
+    :param repo: Name of repo
+    :param clone_dir Directory into which to clone
+    :param login: Username of current user
+    :param token: Corresponding access token of current user
+    :param retry: Whether to retry
     :return:
     """
-    logger.info('Scanning repo %s...', repo)
+    repo_clone_path = os.path.join(clone_dir, '%s_%s' % (parent_owner, repo))
 
-    result = search_in_repo(api_url, repo, old)
-
-    # Skip if no matches.
-    if len(result['items']) < 1:
-        return None
-
-    html_url = result['items'][0]['html_url']
-    raw_url = html_url_to_raw_url(base_url, html_url)
-    text = requests.get(raw_url).text
-    if old in text:
-        # We found an outdated string
-        return raw_url
-
-    # We didn't find an outdated dependency
-    return None
-
-
-def clone_repo(ssh_uri, owner, repo, clone_dir, retry=False):
-    """
-    Clone a repo with retries. Return the path of the cloned repo or None on failure.
-    :param ssh_uri:
-    :param owner:
-    :param repo:
-    :param clone_dir
-    :param retry:
-    :return:
-    """
-    repo_uri = '%s:%s/%s' % (ssh_uri, owner, repo)
-    repo_clone_path = os.path.join(clone_dir, repo)
+    # If it exists, assume it's already cloned
+    if os.path.isdir(repo_clone_path):
+        return
+    partial_clone_url = clone_url.split('https://')[1]
+    authed_clone_url = 'https://%s:%s@%s' % (login, token, partial_clone_url)
 
     try:
-        run_cmd(['git', 'clone', repo_uri, repo_clone_path], stderr=subprocess.STDOUT, retry=retry)
+        run_cmd(['git', 'clone', authed_clone_url, repo_clone_path],
+                stderr=subprocess.STDOUT, retry=retry,
+                log_msg='Cloning %s' % clone_url)
     except subprocess.CalledProcessError as e:
-        logger.info('Failed to clone repo %s into %s.\n%s', repo_uri, repo_clone_path, e)
+        logger.info('Failed to clone repo %s into %s.\n%s', clone_url,
+                    repo_clone_path, e)
         return None
     return repo_clone_path
 
 
-def at_mention_recent_committers(base_url, api_url, repo, pr_number, commenting_user, github_token):
+def sync_fork_with_upstream(repo_path, parent_repo):
+    """
+    Sync the repo's default branch with upstream's default branch
+    :param repo_path: path to clone of the forked repo
+    :param parent_repo: github.Github.Repository
+    :return:
+    """
+    default_branch = parent_repo.default_branch
+    upstream = 'upstream'
+
+    with in_dir(repo_path):
+        run_cmd(['git', 'checkout', default_branch], stderr=subprocess.STDOUT)
+
+        try:
+            run_cmd(['git', 'remote', 'add', upstream, parent_repo.clone_url],
+                    stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError:
+            # Ignore non-zero exit code; we'll assume it's because remote exists
+            pass
+
+        # Go back in case upstream was force pushed
+        try:
+            run_cmd(['git', 'reset', '--hard', 'HEAD~10'],
+                    stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError:
+            # Ignore in case there aren't that many commits
+            pass
+
+        run_cmd(['git', 'pull', upstream, default_branch],
+                stderr=subprocess.STDOUT)
+
+        run_cmd(['git', 'push', '-f', 'origin', default_branch],
+                stderr=subprocess.STDOUT)
+
+
+def at_mention_recent_committers(pull, now, commenting_user):
     """
     @Mention recent committers
-    :param base_url:
-    :param api_url:
-    :param repo: owner/repo
-    :param pr_number:
+    :param pull: github.PullRequest.PullRequest
+    :param now: datetime.datetime
     :param commenting_user:
-    :param github_token:
     :return:
     """
     # Do not remind/spam too frequently
-    last_reminder_age = get_last_reminder_age(api_url, repo, pr_number, commenting_user)
-    if last_reminder_age is not None and REMINDER_INTERVAL_SECONDS > last_reminder_age:
+    last_reminder_datetime = get_last_reminder_datetime(pull, commenting_user)
+    if last_reminder_datetime is not None \
+            and (now - last_reminder_datetime).days < REMINDER_INTERVAL_DAYS:
+        logger.debug('Last @ mention reminder for PR %s was less than a week '
+                     'ago.', pull.html_url)
         return
 
-    recent_committers = get_recent_committers(api_url, repo)
-    comment = ' '.join(['@' + rc for rc in recent_committers])
-    if not comment_on_issue(api_url, repo, pr_number, comment, github_token):
-        pr_url = '%s%s/pulls/%d' % (base_url, repo, pr_number)
-        logger.error('Failed to @mention committers "%s" on PR %s', comment, pr_url)
-    else:
-        logger.info('@ mentioned recent committers: "%s".', comment)
+    # We can't get collaborators even though that'd make more sense because
+    # you need push rights to view collaborators. Just hope some of the recent
+    # committers are also collaborators.
+    # TODO mention only 4 or so recent committers?
+    recent_committers = get_recent_committers(pull.base.repo)
+    comment = 'Please review. ' \
+              + ' '.join(['@' + rc for rc in recent_committers])
+    pull.create_issue_comment(comment)
+    logger.info('@ mentioned recent committers: "%s" on PR %s.',
+                comment, pull.html_url)
 
 
-def get_last_reminder_age(api_url, repo, pr_number, commenting_user):
+def get_last_reminder_datetime(pull, commenting_user):
     """
-    Get the age in seconds since the last @mention comment/reminder.
-    Return None to indicate error or that no reminder has been posted.
-    :param api_url:
-    :param repo:
-    :param pr_number:
+    Get the datetime of the last @mention comment/reminder by the
+    commenting_user. Return None to indicate error or that no reminder has been
+    posted.
+    :param pull:
     :param commenting_user:
-    :return: Number of seconds ago
+    :return: datetime
     """
-    r = requests.get('%srepos/%s/issues/%d/comments' % (api_url, repo, pr_number))
-    if r.status_code != requests.codes.ok:
-        logger.error('Could not get comments from repo "%s" and issue #%d. Returning -1.', repo, pr_number)
-        return None
-    comments = json.loads(r.text)
-
-    for c in comments[::-1]:
-        if c['user']['login'] == commenting_user and c['body'].startswith('@'):
-            return (datetime.datetime.now() -
-                    datetime.datetime.strptime(c['created_at'], '%Y-%m-%dT%H:%M:%SZ')).total_seconds()
+    for comment in pull.get_issue_comments().reversed:
+        if comment.user.login == commenting_user:
+            return comment.created_at
     return None
 
 
@@ -676,66 +463,39 @@ def parse_commit_message_file(file_path):
     :return:
     """
     with open(file_path) as f:
-        commit_lines = f.readlines()
-        commit_msg_title = commit_lines[0]
-        commit_msg = ''.join(commit_lines)
+        commit_msg = f.read()
+        commit_msg_title = commit_msg.splitlines()[0]
     return commit_msg_title, commit_msg
 
 
-def list_repos(api_url, token):
-    """
-    Return a list of all the user's repos
-    :param api_url:
-    :param token:
-    :return: a list of repo names
-    """
-    repo_names = []
-
-    r = requests.get('%suser/repos' % api_url, auth=HTTPBasicAuth(token, 'x-oauth-basic'))
-    repos = json.loads(r.text)
-    logger.info('User has %s repos' % len(repos))
-
-    for repo in repos:
-        repo_names.append(repo['name'])
-
-    return repo_names
-
-
-def remind_prs(base_url, api_url, pr_branch, username, token):
+def remind_open_pulls(gh):
     """
     For all this user's open PRs, comment on them with @ mentions as a reminder
-    :param base_url:
-    :param api_url:
-    :param pr_branch:
-    :param username:
-    :param token:
+    :param gh: github.Github client
     :return:
     """
-    repos = list_repos(api_url, token)
+    user = gh.get_user()
+    issues = gh.search_issues('', state='open', author=user.login, type='pr')
+    now = datetime.datetime.now()
 
-    for repo in repos:
-        fork_owner = get_fork_owner(api_url, username, repo, token)
-        pull_reqs = get_pull_requests(api_url, fork_owner, repo, branch=username + ':' + pr_branch)
-        if not isinstance(pull_reqs, list) or len(pull_reqs) < 1:
-            continue
-        at_mention_recent_committers(base_url, api_url, fork_owner + '/' + repo, pull_reqs[0]['number'],
-                                     username, token)
+    for issue in issues:
+        pull = issue.repository.get_pull(issue.number)
+        at_mention_recent_committers(pull, now, user.login)
 
 
-def get_fork_owner(api_url, fork_owner, repo, token):
+def html_url_to_raw_url(base_url, html_url):
     """
-    Get the username of the parent repo of the forked repo
-    :param api_url:
-    :param fork_owner: The username of the user who owns the forked repo
-    :param repo:
-    :param token:
-    :return: The name of the owner of the parent repo. None if the repo is not a fork.
+    Return a URL to the raw file on the master branch from Github given an HTML
+    URL from a commit hash.
+    E.g. https://github.com/spotify/helios/blob/ea5e46dc0bd3a996/pom.xml ->
+    https://github.com/raw/spotify/helios/master/pom.xml.
+    :param base_url:
+    :param html_url:
+    :return:
     """
-    r = requests.get('%srepos/%s/%s' % (api_url, fork_owner, repo), auth=HTTPBasicAuth(token, 'x-oauth-basic'))
-    repo = json.loads(r.text)
-    if 'parent' in repo:
-        return repo['parent']['owner']['login']
-    return None
+    t = re.sub(r'blob/[a-z0-9]+?/', 'blob/master/', html_url)
+    t = re.sub(r'^%s' % base_url, '%sraw/' % base_url, t)
+    return t.replace('/blob/master/', '/master/')
 
 
 if __name__ == '__main__':

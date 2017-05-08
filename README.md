@@ -44,7 +44,7 @@ Rest of commit message
 For example:
 
 ```
-python prbot.py --language java helios-testing 0.8.380 commit_message.sample davidxia \
+python prbot.py --language java helios-testing 0.8.380 commit_message.example davidxia \
     <access token> --delete-forks --at-mention-committers -v
 ```
 
