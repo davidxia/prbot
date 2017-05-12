@@ -114,6 +114,8 @@ def main():
         logger.debug('Searching %s', cf.repository.full_name)
         # Github search returns fuzzy results. Check the raw file has exact
         # string before cloning whole repo.
+        import pdb; pdb.set_trace()
+        cf.decoded_content
         if not string_in_file(cf.git_url, args.old):
             continue
 
@@ -395,7 +397,7 @@ def sync_fork_with_upstream(repo_path, parent_repo):
             run_cmd(['git', 'remote', 'add', upstream, parent_repo.clone_url],
                     stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError:
-            # Ignore non-zero exit code; we'll assume it's because remote exists
+            # Ignore non-zero exit code; assume it's because remote exists
             pass
 
         # Go back in case upstream was force pushed
