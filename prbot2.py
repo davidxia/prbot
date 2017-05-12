@@ -114,7 +114,7 @@ def main():
         logger.debug('Searching %s', cf.repository.full_name)
         # Github search returns fuzzy results. Check the raw file has exact
         # string before cloning whole repo.
-        if not string_in_file(cf.git_url, args.old):
+        if re.search(r'%s\b' % args.old, cf.decoded_content) is None:
             continue
 
         head = authed_user.login + ':' + pr_branch
@@ -207,23 +207,6 @@ def main():
         if args.at_mention_committers:
             at_mention_recent_committers(pull, datetime.datetime.now(),
                                          authed_user.login)
-
-
-def string_in_file(git_url, string):
-    """
-    Search git URL for str.
-    :param git_url: URL
-    :param string: String to find.
-    :return: True if string is found. False otherwise.
-    """
-    headers = {'Accept': 'application/vnd.github.v3.raw'}
-    try:
-        text = requests.get(git_url, headers=headers).text
-        m = re.search(r'%s\b' % string, text)
-        return m is not None
-    except requests.exceptions.ConnectionError as e:
-        logger.warn(e)
-    return False
 
 
 def remove_dir(dir_name):
