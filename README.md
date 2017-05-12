@@ -1,7 +1,8 @@
 # PR Bot
 
-This simple script is used to scan **Maven projects** in GitHub or GitHub Enterprise for outdated
-dependencies and open pull requests to update them.
+This script creates pull requests to find and replace strings in Github or
+Github Enterprise for outdated dependencies and open pull requests to update
+them. It can also create PRs to update **Maven projects**'s dependencies.
 
 
 ## Prerequisites
@@ -42,6 +43,13 @@ Rest of commit message
 ```
 
 For example:
+
+```
+python prbot2.py --no-pushed 'old-string' 'new-string' commit_message prbot \
+    <access token> --at-mention-committers
+```
+
+or
 
 ```
 python prbot.py --language java helios-testing 0.8.380 commit_message.example davidxia \
