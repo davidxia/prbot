@@ -1,8 +1,9 @@
-appdirs==1.4.3
-cryptography==1.8.1
-dateutils==0.6.6
+# Please don't add dependencies to this file by hand!
+# Instead, pip install whatever dependencies you need in your virtualenv, and
+# then run `pip freeze > requirements.txt`. This helps keep the file sorted,
+# but more importantly, ensures that not just top-level dependencies are frozen
+# but also transitive dependencies.
+
+
 PyGithub==1.34
-pyparsing==2.2.0
-urllib3[secure]==1.21
-requests[security]==2.13.0
-semantic-version==2.4.2
+PyJWT==1.5.0

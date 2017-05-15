@@ -2,6 +2,8 @@
 
 """Create pull requests to search and replace strings in GitHub repos."""
 
+from __future__ import print_function
+
 import argparse
 import datetime
 import logging
@@ -13,17 +15,18 @@ import time
 from contextlib import contextmanager
 from datetime import date
 
-import requests
+import sys
 from dateutil.relativedelta import relativedelta
 from github import Github
-from github.AuthenticatedUser import AuthenticatedUser
-from github.GithubException import UnknownObjectException, GithubException
+from github.GithubException import BadCredentialsException
+from github.GithubException import GithubException
+from github.GithubException import UnknownObjectException
 
 DEFAULT_DOMAIN = 'github.com'
 DEFAULT_API_URL = 'https://api.github.com'
 RESULTS_PER_PAGE = 100
 CLONE_DIR = 'repos'
-LOG_FORMAT = '%(asctime)s %(levelname)s: %(message)s'
+LOG_FORMAT = '%(asctime)s %(levelname)s %(name)s: %(message)s'
 DEFAULT_PUSHED_DATE = (date.today() + relativedelta(months=-1))\
     .strftime('%Y-%m-%d')
 MAX_CMD_RETRIES = 10
@@ -32,71 +35,38 @@ REMINDER_INTERVAL_DAYS = 7
 MAX_GITHUB_RESULTS_PAGE = 10  # Only first 1000 search results are available
 
 logger = logging.getLogger(__name__)
-log_handler = logging.StreamHandler()
-log_handler.setFormatter(logging.Formatter(LOG_FORMAT))
-logger.addHandler(log_handler)
-logger.setLevel(logging.INFO)
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        prog='prbot', description='Automates Github PRs')
-    parser.add_argument(
-        '--language',
-        help='Searches repositories that are written in this language.')
-    parser.add_argument(
-        '--pushed',
-        default=DEFAULT_PUSHED_DATE,
-        help='Filters code search based on last push to repos. '
-             'Must be in the format [><=]YYYY-MM-DD. '
-             'Defaults to repos last pushed within the last month.')
-    parser.add_argument(
-        '--no-pushed', action='store_true',
-        default=False,
-        help='Do not limit to searching for repos pushed to within the time '
-             'specified by --pushed. Overrides the --pushed flag. '
-             'Defaults to false')
-    parser.add_argument(
-        '--at-mention-committers', action='store_true',
-        help='@ mention recent committers.')
-    parser.add_argument(
-        '--api-url',
-        help='The API URL of GitHub or GitHub Enterprise. Defaults to %s.'
-             % DEFAULT_API_URL)
-    parser.add_argument(
-        '-v', '--verbosity', action='count', default=0,
-        help='Increase output verbosity.')
-    parser.add_argument(
-        'old', help='Old string to replace. Can be regex expression.')
-    parser.add_argument(
-        'new', help='Replacement string.')
-    parser.add_argument(
-        'commit_message_file',
-        help='File containing the Git commit message.')
-    parser.add_argument('fork_owner', help='The owner of the git forks.')
-    parser.add_argument(
-        'github_token',
-        help='The personal access token of the owner of the git forks.')
+def setup_logging(level=logging.INFO):
+    log_handler = logging.StreamHandler()
+    log_handler.setFormatter(logging.Formatter(LOG_FORMAT))
 
-    args = parser.parse_args()
+    logger.addHandler(log_handler)
+    logger.setLevel(level)
 
-    if args.verbosity > 0:
-        logger.setLevel(logging.DEBUG)
 
-    gh = Github(args.github_token, base_url=args.api_url)
+def add_subparser(subparser, name):
+    title = name + ' subcommands'
+    return subparser.add_parser(name).add_subparsers(title=title)
+
+
+def add_command(subparser, cmdname, func, **kwargs):
+    if not callable(func):
+        raise Exception('func must be callable')
+
+    cmd = subparser.add_parser(cmdname, **kwargs)
+    cmd.set_defaults(func=func)
+    return cmd
+
+
+def create_prs(gh, args):
     authed_user = gh.get_user()
-    if not isinstance(authed_user, AuthenticatedUser):
-        exit('PyGithub did not return AuthenticatedUser')
 
     try:
         commit_msg_title, commit_msg = parse_commit_message_file(
             args.commit_message_file)
     except IOError as e:
         exit('Specify path to a file containing the commit message.\n%s' % e)
-
-    # Remind committers for open PRs
-    if args.at_mention_committers:
-        remind_open_pulls(gh)
 
     remove_dir(CLONE_DIR)
 
@@ -162,7 +132,7 @@ def main():
                                 retry=True)
         if clone_path is None:
             logger.warning('Failed to clone repo %s/%s.'
-                           % (args.fork_owner, repo_name))
+                           % (authed_user.login, repo_name))
             continue
 
         # Sync in case fork is behind upstream.
@@ -452,7 +422,7 @@ def parse_commit_message_file(file_path):
     return commit_msg_title, commit_msg
 
 
-def remind_open_pulls(gh):
+def remind_open_pulls(gh, args):
     """
     For all this user's open PRs, comment on them with @ mentions as a reminder
     :param gh: github.Github client
@@ -482,5 +452,90 @@ def html_url_to_raw_url(base_url, html_url):
     return t.replace('/blob/master/', '/master/')
 
 
-if __name__ == '__main__':
-    main()
+def main(argv):
+    top_parser = argparse.ArgumentParser(
+        prog='prbot', description='Automates Github PRs')
+    top_parser.add_argument(
+        'github_token',
+        help='The personal access token of the owner of the git forks.')
+    top_parser.add_argument(
+        '--api-url',
+        default=DEFAULT_API_URL,
+        help='The API URL of GitHub or GitHub Enterprise. Defaults to %s.'
+             % DEFAULT_API_URL)
+    top_parser.add_argument(
+        '-v', '--verbose', action='store_true', help='Verbose output')
+
+    # To add multiple levels of subparsers, for example:
+    #
+    #   $ tsunami variable list ...
+    #   $ tsunami namespace somecommand ...
+    #
+    # it is necessary to:
+    #
+    # 1. call parser.add_subparsers() on a parser object
+    # 2. call subparsers.add_parser(name) on that subparsers object to get a new
+    #    parser object
+    #
+    # Note that argparse will throw an exception if you call .add_subparsers()
+    # more than once on the same parser instance, so a reference should be saved
+    # to the returned subparsers instance.
+    #
+    # Then, "commands" (the leaf of the parser) are added to a subparser.
+
+    subparsers = top_parser.add_subparsers(title='Subcommands')
+
+    pulls_cmd = add_subparser(subparsers, 'pulls')
+
+    # Subcommand setup:
+    # Each "command" is added as another parser under a subparsers object.
+    # Since parse_args() doesn't return which subcommand was chosen,
+    # we use subcmd.set_defaults(func=foo) to set a function to run when
+    # that command is chosen.
+
+    add_command(pulls_cmd, 'remind', remind_open_pulls,
+                help='@-mention committers on open PRs')
+
+    create_cmd = add_command(pulls_cmd, 'create', create_prs, help='Create PRs')
+    create_cmd.add_argument(
+        '--language',
+        help='Searches repositories that are written in this language.')
+    create_cmd.add_argument(
+        '--pushed',
+        default=DEFAULT_PUSHED_DATE,
+        help='Filters code search based on last push to repos. '
+             'Must be in the format [><=]YYYY-MM-DD. '
+             'Defaults to repos last pushed within the last month.')
+    create_cmd.add_argument(
+        '--no-pushed', action='store_true',
+        default=False,
+        help='Do not limit to searching for repos pushed to within the time '
+             'specified by --pushed. Overrides the --pushed flag. '
+             'Defaults to false')
+    create_cmd.add_argument(
+        '--at-mention-committers', action='store_true',
+        help='@ mention recent committers.')
+    create_cmd.add_argument(
+        'old', help='Old string to replace. Can be regex expression.')
+    create_cmd.add_argument(
+        'new', help='Replacement string.')
+    create_cmd.add_argument(
+        'commit_message_file',
+        help='Path to file containing Git commit message.')
+
+    # finally lets parse some args!
+    args = top_parser.parse_args(argv)
+
+    if args.verbose:
+        print('received arguments: {0}'.format(args))
+        setup_logging(logging.DEBUG)
+
+    gh = Github(args.github_token, base_url=args.api_url)
+    authed_user = gh.get_user()
+    try:
+        authed_user.login
+    except BadCredentialsException:
+        sys.exit('Invalid Github access token')
+
+    # invoke the subcommand function
+    args.func(gh, args)
